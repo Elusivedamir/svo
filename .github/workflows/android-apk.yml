@@ -76,12 +76,31 @@ jobs:
           export GODOT_ANDROID_KEYSTORE_DEBUG_PATH="$RUNNER_TEMP/debug.keystore"
           mkdir -p build
           "$GODOT" --headless --path . --editor --quit
-          "$GODOT" --headless --path . --export-debug "Android" build/SVO-v0.2.2-debug.apk
-          test -s build/SVO-v0.2.2-debug.apk
+          # Run the real launch scene, not just the exporter: black-screen regressions must fail CI.
+          set +e
+          timeout 14s "$GODOT" --headless --audio-driver Dummy --path . > "$RUNNER_TEMP/smoke.log" 2>&1
+          smoke_exit=$?
+          set -e
+          cat "$RUNNER_TEMP/smoke.log"
+          if [[ "$smoke_exit" != 0 && "$smoke_exit" != 124 ]]; then
+            echo "ERROR: Godot process failed during startup: $smoke_exit"
+            exit 1
+          fi
+          if grep -E 'SCRIPT ERROR:|Parse Error:|Invalid call\.|Failed to load script' "$RUNNER_TEMP/smoke.log"; then
+            echo "ERROR: Godot runtime/script error detected"
+            exit 1
+          fi
+          if ! grep -Fq 'SMOKE_MAIN_MENU_READY' "$RUNNER_TEMP/smoke.log"; then
+            echo "ERROR: Main menu did not become ready during startup test"
+            exit 1
+          fi
+          echo "PASS: real startup reached main menu"
+          "$GODOT" --headless --path . --export-debug "Android" build/SVO-v0.2.3-debug.apk
+          test -s build/SVO-v0.2.3-debug.apk
 
       - name: Upload installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: SVO-v0.2.2-debug
-          path: build/SVO-v0.2.2-debug.apk
+          name: SVO-v0.2.3-debug
+          path: build/SVO-v0.2.3-debug.apk
           if-no-files-found: error
