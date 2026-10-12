@@ -6,6 +6,9 @@ config/name="Линия фронта: Командир батальона"
 run/main_scene="res://scenes/loading.tscn"
 config/icon="res://assets/icons/app_icon.png"
 config/features=PackedStringArray("4.5", "GL Compatibility")
+boot_splash/show_image=false
+boot_splash/bg_color=Color(0.04, 0.05, 0.05, 1)
+boot_splash/minimum_display_time=0
 
 [autoload]
 

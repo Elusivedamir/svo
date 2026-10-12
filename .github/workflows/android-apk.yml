@@ -100,12 +100,12 @@ jobs:
           fi
           echo "PASS: music autoload started"
           echo "PASS: real startup reached main menu"
-          "$GODOT" --headless --path . --export-debug "Android" build/SVO-v0.2.3-debug.apk
-          test -s build/SVO-v0.2.3-debug.apk
+          "$GODOT" --headless --path . --export-debug "Android" build/SVO-v0.2.4-debug.apk
+          test -s build/SVO-v0.2.4-debug.apk
 
       - name: Upload installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: SVO-v0.2.3-debug
-          path: build/SVO-v0.2.3-debug.apk
+          name: SVO-v0.2.4-debug
+          path: build/SVO-v0.2.4-debug.apk
           if-no-files-found: error
