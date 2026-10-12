@@ -1,0 +1,85 @@
+name: Android APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Use JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK components
+        run: sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.1"
+
+      - name: Download Godot 4.5.2 and export templates
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT_VERSION="4.5.2-stable"
+          ROOT="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}"
+          curl -fL --retry 3 "${ROOT}/Godot_v${GODOT_VERSION}_linux.x86_64.zip" -o "$RUNNER_TEMP/godot.zip"
+          curl -fL --retry 3 "${ROOT}/Godot_v${GODOT_VERSION}_export_templates.tpz" -o "$RUNNER_TEMP/templates.tpz"
+          mkdir -p "$RUNNER_TEMP/godot" "$RUNNER_TEMP/templates"
+          unzip -q "$RUNNER_TEMP/godot.zip" -d "$RUNNER_TEMP/godot"
+          unzip -q "$RUNNER_TEMP/templates.tpz" -d "$RUNNER_TEMP/templates"
+          chmod +x "$RUNNER_TEMP/godot/Godot_v${GODOT_VERSION}_linux.x86_64"
+          mkdir -p "$HOME/.local/share/godot/export_templates/4.5.2.stable"
+          cp -a "$RUNNER_TEMP/templates/templates/." "$HOME/.local/share/godot/export_templates/4.5.2.stable/"
+
+      - name: Configure Godot Android paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.config/godot"
+          cat > "$HOME/.config/godot/editor_settings-4.5.tres" <<EOF
+          [gd_resource type="EditorSettings" format=3]
+
+          [resource]
+          export/android/android_sdk_path = "$ANDROID_HOME"
+          export/android/java_sdk_path = "$JAVA_HOME"
+          EOF
+
+      - name: Generate temporary debug signing key
+        shell: bash
+        run: |
+          keytool -genkeypair -noprompt -v -keystore "$RUNNER_TEMP/debug.keystore" \
+            -storepass android -alias androiddebugkey -keypass android \
+            -dname "CN=Android Debug,O=Android,C=US" -keyalg RSA -keysize 2048 -validity 10000
+
+      - name: Import Godot project and export APK
+        shell: bash
+        env:
+          GODOT_ANDROID_KEYSTORE_DEBUG_USER: androiddebugkey
+          GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD: android
+        run: |
+          set -euo pipefail
+          GODOT="$RUNNER_TEMP/godot/Godot_v4.5.2-stable_linux.x86_64"
+          export GODOT_ANDROID_KEYSTORE_DEBUG_PATH="$RUNNER_TEMP/debug.keystore"
+          mkdir -p build
+          "$GODOT" --headless --path . --editor --quit
+          "$GODOT" --headless --path . --export-debug "Android" build/SVO-v0.1-debug.apk
+          test -s build/SVO-v0.1-debug.apk
+
+      - name: Upload installable APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: SVO-v0.1-debug
+          path: build/SVO-v0.1-debug.apk
+          if-no-files-found: error
