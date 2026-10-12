@@ -1,0 +1,5 @@
+v0.1.1: preserved approved splash image, cropped baked-in bar/status from lower section.
+Changed screen stretch to aspect=expand, so the app fills ultrawide Android displays.
+Actual UI indicator moves only while the approved background texture loads.
+Once loaded it disappears and shows READY, with no fake percentages.
+No game menu yet.

@@ -8,15 +8,15 @@ config/features=PackedStringArray("4.5", "GL Compatibility")
 
 [display]
 
-window/size/viewport_width=1920
+window/size/viewport_width=2400
 window/size/viewport_height=1080
 window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
 window/handheld/orientation=0
 
 [rendering]
 
 textures/vram_compression/import_etc2_astc=true
-
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
-environment/defaults/default_clear_color=Color(0.055, 0.075, 0.066, 1)
+environment/defaults/default_clear_color=Color(0.04, 0.05, 0.05, 1)
