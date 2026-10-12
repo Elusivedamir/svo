@@ -22,8 +22,12 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # setup-android@v3 defaulted to the removed Android SDK 'tools' package.
+      # v4 and an explicit package list avoid that failure.
       - name: Install Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
 
       - name: Install Android SDK components
         run: sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.1"
@@ -48,13 +52,13 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$HOME/.config/godot"
-          cat > "$HOME/.config/godot/editor_settings-4.5.tres" <<EOF
+          cat > "$HOME/.config/godot/editor_settings-4.5.tres" <<EOF2
           [gd_resource type="EditorSettings" format=3]
 
           [resource]
           export/android/android_sdk_path = "$ANDROID_HOME"
           export/android/java_sdk_path = "$JAVA_HOME"
-          EOF
+          EOF2
 
       - name: Generate temporary debug signing key
         shell: bash
