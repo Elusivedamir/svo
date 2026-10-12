@@ -12,6 +12,9 @@ var is_ready := false
 var failed := false
 var load_request_started := false
 var phase := 0.0
+var elapsed := 0.0
+var finished_visual_intro := false
+const INTRO_DURATION := 1.8
 
 func _ready() -> void:
     background = TextureRect.new()
@@ -19,6 +22,7 @@ func _ready() -> void:
     background.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
     background.mouse_filter = Control.MOUSE_FILTER_IGNORE
     add_child(background)
+    background.modulate.a = 0.0
     background.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 
     progress_track = ColorRect.new()
@@ -35,7 +39,7 @@ func _ready() -> void:
     status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
     status_label.add_theme_font_size_override("font_size", 27)
     status_label.add_theme_color_override("font_color", Color(0.96, 0.96, 0.94))
-    status_label.text = "ЗАГРУЗКА…"
+    status_label.text = "ПОДГОТОВКА ЭКРАНА…"
     add_child(status_label)
 
     resized.connect(_layout)
@@ -67,6 +71,7 @@ func _position_segment() -> void:
 
 func _process(delta: float) -> void:
     phase += delta
+    elapsed += delta
     if load_request_started and not is_ready and not failed:
         var state := ResourceLoader.load_threaded_get_status(BACKGROUND_PATH)
         if state == ResourceLoader.THREAD_LOAD_LOADED:
@@ -76,11 +81,17 @@ func _process(delta: float) -> void:
             else:
                 background.texture = texture
                 is_ready = true
-                status_label.text = "ГОТОВО"
-                progress_track.visible = false
-                progress_segment.visible = false
+                var intro := create_tween()
+                intro.tween_property(background, "modulate:a", 1.0, 0.85)
         elif state == ResourceLoader.THREAD_LOAD_FAILED or state == ResourceLoader.THREAD_LOAD_INVALID_RESOURCE:
             _fail()
+    if is_ready and elapsed >= INTRO_DURATION and not finished_visual_intro:
+        finished_visual_intro = true
+        status_label.text = "ГОТОВО"
+        var fade := create_tween()
+        fade.set_parallel(true)
+        fade.tween_property(progress_track, "modulate:a", 0.0, 0.4)
+        fade.tween_property(progress_segment, "modulate:a", 0.0, 0.4)
     _position_segment()
 
 func _fail() -> void:
