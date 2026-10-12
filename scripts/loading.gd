@@ -1,8 +1,9 @@
 extends Control
 
-# The approved background is not a progress indicator.
-# Show animated indeterminate activity only during actual asset loading.
+# Approved v0.1.2 splash remains unchanged. Move to main menu after it finishes.
 const BACKGROUND_PATH: String = "res://assets/loading_splash_ground.png"
+const MENU_PATH: String = "res://scenes/main_menu.tscn"
+const INTRO_DURATION: float = 1.8
 
 var background: TextureRect
 var progress_track: ColorRect
@@ -14,7 +15,6 @@ var load_request_started := false
 var phase := 0.0
 var elapsed := 0.0
 var finished_visual_intro := false
-const INTRO_DURATION := 1.8
 
 func _ready() -> void:
     background = TextureRect.new()
@@ -92,7 +92,14 @@ func _process(delta: float) -> void:
         fade.set_parallel(true)
         fade.tween_property(progress_track, "modulate:a", 0.0, 0.4)
         fade.tween_property(progress_segment, "modulate:a", 0.0, 0.4)
+        get_tree().create_timer(0.75).timeout.connect(_open_main_menu)
     _position_segment()
+
+func _open_main_menu() -> void:
+    if not failed and is_inside_tree():
+        var result := get_tree().change_scene_to_file(MENU_PATH)
+        if result != OK:
+            _fail()
 
 func _fail() -> void:
     failed = true
