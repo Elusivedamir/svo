@@ -94,6 +94,11 @@ jobs:
             echo "ERROR: Main menu did not become ready during startup test"
             exit 1
           fi
+          if ! grep -Fq 'SMOKE_MUSIC_STARTED: true' "$RUNNER_TEMP/smoke.log"; then
+            echo "ERROR: music autoload did not start"
+            exit 1
+          fi
+          echo "PASS: music autoload started"
           echo "PASS: real startup reached main menu"
           "$GODOT" --headless --path . --export-debug "Android" build/SVO-v0.2.3-debug.apk
           test -s build/SVO-v0.2.3-debug.apk
