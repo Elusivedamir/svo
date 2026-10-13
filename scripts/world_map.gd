@@ -1,8 +1,7 @@
 extends Node2D
 
-# v0.3.6: unique continuous 12800x7200 landscape with independently authored walkability.
-# Preserve controls, camera and ball movement from the last successful build.
-# No game combat logic, structures, or HUD. Tap a point to pathfind, swipe to pan.
+# v0.4: mobile camera controls over the verified v0.3.6 landscape.
+# Tap to pathfind, swipe to pan, pinch to zoom; camera controls never issue orders.
 const MAP_TEXTURE: Texture2D = preload("res://assets/map/terrain_v0.3.4.png")
 const NAV_TEXTURE: Texture2D = preload("res://assets/map/navigation_v0.3.6.png")
 const TERRAIN_CLARITY: Shader = preload("res://shaders/terrain_clarity.gdshader")
@@ -17,6 +16,8 @@ const CELL_WOODS := 2
 const CELL_HOUSE := 3
 const CELL_WATER := 4
 const CELL_BRIDGE := 5
+const TAP_SLOP := 20.0
+const MIN_PINCH_DISTANCE := 8.0
 
 var terrain: Sprite2D
 var camera: Camera2D
@@ -31,6 +32,17 @@ var blocked_at: Vector2 = Vector2.ZERO
 var blocked_timer := 0.0
 var returning := false
 var camera_min_zoom := 0.25
+var camera_max_zoom := 1.0
+var camera_view_initialized := false
+var camera_controls: CanvasLayer
+var focus_button: Button
+var touch_points: Dictionary = {}
+var ui_touch_ids: Dictionary = {}
+var gesture_was_multi := false
+var single_touch_index := -1
+var pinch_ids := Vector2i(-1, -1)
+var pinch_distance := 0.0
+var pinch_center := Vector2.ZERO
 var touch_down := false
 var touch_start := Vector2.ZERO
 var touch_last := Vector2.ZERO
@@ -110,6 +122,7 @@ func _ready() -> void:
         push_error("Test marker spawn is blocked")
         return
     ball_pos = nav.get_point_position(spawn)
+    _create_camera_controls()
     queue_redraw()
     print("SMOKE_MAP_READY")
     print("SMOKE_NAV_READY field/road/woods/houses/water/bridge: ", nav_size, "/", road, "/", wood, "/", buildings, "/", water, "/", bridges)
@@ -173,11 +186,190 @@ func _resize_camera() -> void:
     if not is_instance_valid(camera):
         return
     var viewport: Vector2 = get_viewport_rect().size
-    # Minimum permits strategic whole-map view; initial view retains the old world scale.
+    _cancel_touch_gesture()
+    ui_touch_ids.clear()
+    var previous_min: float = camera_min_zoom
+    var previous_zoom: float = camera.zoom.x
+    # Preserve the original zoom limits and scale relative to a resized viewport.
     camera_min_zoom = maxf(viewport.x / WORLD_SIZE.x, viewport.y / WORLD_SIZE.y)
     var sector_zoom: float = maxf(viewport.x / SECTOR_SIZE.x, viewport.y / SECTOR_SIZE.y)
-    camera.zoom = Vector2.ONE * maxf(sector_zoom, camera_min_zoom)
+    camera_max_zoom = maxf(camera_min_zoom * 3.0, sector_zoom * 3.0)
+    var new_zoom: float = maxf(sector_zoom, camera_min_zoom)
+    if camera_view_initialized and previous_min > 0.0:
+        new_zoom = previous_zoom * camera_min_zoom / previous_min
+    camera.zoom = Vector2.ONE * clampf(new_zoom, camera_min_zoom, camera_max_zoom)
+    camera_view_initialized = true
     _clamp_camera()
+    _layout_camera_controls()
+
+func _create_camera_controls() -> void:
+    camera_controls = CanvasLayer.new()
+    camera_controls.name = "CameraControls"
+    camera_controls.layer = 20
+    add_child(camera_controls)
+    focus_button = Button.new()
+    focus_button.name = "FocusMarker"
+    focus_button.text = "К ШАРИКУ"
+    focus_button.tooltip_text = "Вернуть камеру к шарику"
+    focus_button.focus_mode = Control.FOCUS_NONE
+    focus_button.mouse_filter = Control.MOUSE_FILTER_STOP
+    focus_button.add_theme_font_size_override("font_size", 28)
+    focus_button.add_theme_color_override("font_color", Color("#ecf5eb"))
+    var normal := StyleBoxFlat.new()
+    normal.bg_color = Color(0.035, 0.07, 0.075, 0.94)
+    normal.border_color = Color(0.40, 0.62, 0.54, 0.85)
+    normal.set_border_width_all(2)
+    normal.set_corner_radius_all(14)
+    focus_button.add_theme_stylebox_override("normal", normal)
+    var pressed := normal.duplicate() as StyleBoxFlat
+    pressed.bg_color = Color(0.13, 0.25, 0.22, 0.97)
+    focus_button.add_theme_stylebox_override("pressed", pressed)
+    focus_button.add_theme_stylebox_override("hover", normal.duplicate())
+    camera_controls.add_child(focus_button)
+    focus_button.pressed.connect(_focus_marker)
+    _layout_camera_controls()
+
+func _layout_camera_controls() -> void:
+    if not is_instance_valid(focus_button):
+        return
+    var viewport: Vector2 = get_viewport_rect().size
+    var margin: float = clampf(minf(viewport.x, viewport.y) * 0.035, 12.0, 40.0)
+    focus_button.size = Vector2(minf(360.0, maxf(160.0, viewport.x - margin * 2.0)), minf(112.0, maxf(56.0, viewport.y - margin * 2.0)))
+    focus_button.position = Vector2(viewport.x - focus_button.size.x - margin, margin)
+
+func _focus_marker() -> void:
+    _cancel_touch_gesture()
+    if not is_instance_valid(camera):
+        return
+    camera.position = ball_pos
+    _clamp_camera()
+
+func _camera_button_contains(screen_point: Vector2) -> bool:
+    return is_instance_valid(focus_button) and focus_button.visible and focus_button.get_global_rect().has_point(screen_point)
+
+func _zoom_camera_at(screen_point: Vector2, factor: float) -> void:
+    _transform_camera(screen_point, screen_point, factor)
+
+func _transform_camera(old_screen_center: Vector2, new_screen_center: Vector2, factor: float) -> void:
+    if not is_instance_valid(camera) or not is_finite(factor) or factor <= 0.0:
+        return
+    var anchor: Vector2 = _screen_to_world(old_screen_center)
+    var new_zoom: float = clampf(camera.zoom.x * factor, camera_min_zoom, camera_max_zoom)
+    camera.zoom = Vector2.ONE * new_zoom
+    camera.position = anchor - (new_screen_center - get_viewport_rect().size * 0.5) / new_zoom
+    _clamp_camera()
+
+func _cancel_touch_gesture() -> void:
+    touch_points.clear()
+    touch_down = false
+    touch_moved = false
+    gesture_was_multi = false
+    single_touch_index = -1
+    pinch_ids = Vector2i(-1, -1)
+    pinch_distance = 0.0
+
+func _rebase_pinch() -> void:
+    if touch_points.size() < 2:
+        pinch_ids = Vector2i(-1, -1)
+        pinch_distance = 0.0
+        return
+    if not touch_points.has(pinch_ids.x) or not touch_points.has(pinch_ids.y):
+        var ids: Array = touch_points.keys()
+        ids.sort()
+        pinch_ids = Vector2i(int(ids[0]), int(ids[1]))
+    var first: Vector2 = touch_points[pinch_ids.x]
+    var second: Vector2 = touch_points[pinch_ids.y]
+    pinch_distance = first.distance_to(second)
+    pinch_center = (first + second) * 0.5
+
+func _begin_map_touch(e: InputEventScreenTouch) -> void:
+    if touch_points.has(e.index):
+        return
+    touch_points[e.index] = e.position
+    touch_down = true
+    if touch_points.size() == 1:
+        single_touch_index = e.index
+        touch_start = e.position
+        touch_last = e.position
+        touch_moved = false
+        gesture_was_multi = false
+    else:
+        gesture_was_multi = true
+        touch_moved = true
+        _rebase_pinch()
+
+func _finish_map_touch(e: InputEventScreenTouch, allow_tap: bool) -> void:
+    if e.canceled:
+        _cancel_touch_gesture()
+        return
+    if not touch_points.has(e.index):
+        return
+    var can_order: bool = allow_tap and touch_points.size() == 1 and not gesture_was_multi and not touch_moved and e.position.distance_to(touch_start) <= TAP_SLOP
+    touch_points.erase(e.index)
+    touch_down = not touch_points.is_empty()
+    if touch_points.is_empty():
+        _cancel_touch_gesture()
+        if can_order:
+            _request_move(e.position)
+    elif touch_points.size() == 1:
+        # After a pinch the remaining finger may pan, but cannot become a tap.
+        gesture_was_multi = true
+        touch_moved = true
+        var ids: Array = touch_points.keys()
+        single_touch_index = int(ids[0])
+        touch_start = touch_points[single_touch_index]
+        touch_last = touch_start
+        pinch_ids = Vector2i(-1, -1)
+        pinch_distance = 0.0
+    else:
+        _rebase_pinch()
+
+func _drag_map_touch(e: InputEventScreenDrag) -> void:
+    if not touch_points.has(e.index):
+        return
+    var old_position: Vector2 = touch_points[e.index]
+    touch_points[e.index] = e.position
+    if touch_points.size() >= 2:
+        if e.index != pinch_ids.x and e.index != pinch_ids.y:
+            return
+        var first: Vector2 = touch_points[pinch_ids.x]
+        var second: Vector2 = touch_points[pinch_ids.y]
+        var new_distance: float = first.distance_to(second)
+        var new_center: Vector2 = (first + second) * 0.5
+        var factor := 1.0
+        if pinch_distance >= MIN_PINCH_DISTANCE and new_distance >= MIN_PINCH_DISTANCE:
+            factor = new_distance / pinch_distance
+        _transform_camera(pinch_center, new_center, factor)
+        pinch_distance = new_distance
+        pinch_center = new_center
+    else:
+        if e.position.distance_to(touch_start) > TAP_SLOP:
+            touch_moved = true
+        if touch_moved:
+            camera.position -= (e.position - old_position) / camera.zoom
+            _clamp_camera()
+        touch_last = e.position
+
+func _input(event: InputEvent) -> void:
+    # GUI can consume a release over the button before _unhandled_input sees it.
+    # Track those cases here without intercepting the Button's normal GUI input.
+    if event is InputEventScreenTouch:
+        var e := event as InputEventScreenTouch
+        if e.pressed and _camera_button_contains(e.position):
+            ui_touch_ids[e.index] = true
+            _cancel_touch_gesture()
+        elif ui_touch_ids.has(e.index):
+            if not e.pressed or e.canceled:
+                ui_touch_ids.erase(e.index)
+                _cancel_touch_gesture()
+        elif not e.pressed and touch_points.has(e.index) and _camera_button_contains(e.position):
+            _finish_map_touch(e, false)
+            get_viewport().set_input_as_handled()
+    elif event is InputEventScreenDrag:
+        var e := event as InputEventScreenDrag
+        if touch_points.has(e.index) and _camera_button_contains(e.position):
+            _drag_map_touch(e)
+            get_viewport().set_input_as_handled()
 
 func _clamp_camera() -> void:
     if not is_instance_valid(camera):
@@ -274,54 +466,52 @@ func _draw() -> void:
         draw_arc(blocked_at, 70.0 + (0.7-blocked_timer)*25.0, 0.0, TAU, 36, Color(1.0, 0.29, 0.23, blocked_timer), 12.0)
 
 func _unhandled_input(event: InputEvent) -> void:
+    if returning:
+        return
     if event.is_action_pressed("ui_cancel"):
         _return_to_menu()
         get_viewport().set_input_as_handled()
         return
     if event is InputEventScreenTouch:
         var e := event as InputEventScreenTouch
-        if e.index != 0:
-            return
-        if e.pressed:
-            touch_down = true
-            touch_start = e.position
-            touch_last = e.position
-            touch_moved = false
-        elif touch_down:
-            touch_down = false
-            if not touch_moved:
-                _request_move(e.position)
+        if e.canceled:
+            _cancel_touch_gesture()
+        elif ui_touch_ids.has(e.index) or not ui_touch_ids.is_empty():
+            pass
+        elif e.pressed:
+            if not _camera_button_contains(e.position):
+                _begin_map_touch(e)
+        else:
+            _finish_map_touch(e, not _camera_button_contains(e.position))
         get_viewport().set_input_as_handled()
     elif event is InputEventScreenDrag:
         var e := event as InputEventScreenDrag
-        if e.index == 0 and touch_down:
-            if e.position.distance_to(touch_start) > 20.0:
-                touch_moved = true
-            if touch_moved:
-                camera.position -= (e.position - touch_last) / camera.zoom
-                _clamp_camera()
-            touch_last = e.position
-            get_viewport().set_input_as_handled()
+        if ui_touch_ids.is_empty():
+            _drag_map_touch(e)
+        get_viewport().set_input_as_handled()
     elif event is InputEventMouseButton:
-        if OS.get_name() == "Android":
-            return
         var e := event as InputEventMouseButton
+        if OS.get_name() == "Android" or e.device < 0 or touch_down:
+            return
         # Desktop / debugging support; Android touch is processed above.
         if e.pressed and e.button_index == MOUSE_BUTTON_LEFT and not touch_down:
             _request_move(e.position)
             get_viewport().set_input_as_handled()
         elif e.pressed and (e.button_index == MOUSE_BUTTON_WHEEL_UP or e.button_index == MOUSE_BUTTON_WHEEL_DOWN):
             var scale_factor := 1.16 if e.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0 / 1.16
-            var new_zoom := clampf(camera.zoom.x * scale_factor, camera_min_zoom, maxf(camera_min_zoom * 3.0, maxf(get_viewport_rect().size.x / SECTOR_SIZE.x, get_viewport_rect().size.y / SECTOR_SIZE.y) * 3.0))
-            camera.zoom = Vector2.ONE * new_zoom
-            _clamp_camera()
+            _zoom_camera_at(e.position, scale_factor)
             get_viewport().set_input_as_handled()
 
 func _notification(what: int) -> void:
     if what == NOTIFICATION_WM_GO_BACK_REQUEST:
         _return_to_menu()
+    elif what == NOTIFICATION_APPLICATION_FOCUS_OUT or what == NOTIFICATION_APPLICATION_PAUSED:
+        _cancel_touch_gesture()
+        ui_touch_ids.clear()
 
 func _return_to_menu() -> void:
+    _cancel_touch_gesture()
+    ui_touch_ids.clear()
     if returning:
         return
     returning = true

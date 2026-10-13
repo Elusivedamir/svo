@@ -156,12 +156,27 @@ jobs:
             exit 1
           fi
           grep -Fq 'PASS_NAVIGATION_V036' "$RUNNER_TEMP/navigation_v036.log"
-          "$GODOT" --headless --path . --export-debug "Android" build/SVO-v0.3.6-debug.apk
-          test -s build/SVO-v0.3.6-debug.apk
+          # Exercise touch gestures and real GUI routing before issuing a new APK.
+          set +e
+          timeout 60s "$GODOT" --headless --audio-driver Dummy --path . --script res://tools/test_camera_v04.gd > "$RUNNER_TEMP/camera_v04.log" 2>&1
+          camera_exit=$?
+          set -e
+          cat "$RUNNER_TEMP/camera_v04.log"
+          if [[ "$camera_exit" != 0 ]]; then
+            echo "ERROR: v0.4 camera regression script exited with $camera_exit"
+            exit 1
+          fi
+          if grep -E 'SCRIPT ERROR:|Parse Error:|Invalid call\.|Failed to load script|SHADER ERROR:' "$RUNNER_TEMP/camera_v04.log"; then
+            echo "ERROR: v0.4 camera regression failed"
+            exit 1
+          fi
+          grep -Fq 'PASS_CAMERA_V04' "$RUNNER_TEMP/camera_v04.log"
+          "$GODOT" --headless --path . --export-debug "Android" build/SVO-v0.4-debug.apk
+          test -s build/SVO-v0.4-debug.apk
 
       - name: Upload installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: SVO-v0.3.6-debug
-          path: build/SVO-v0.3.6-debug.apk
+          name: SVO-v0.4-debug
+          path: build/SVO-v0.4-debug.apk
           if-no-files-found: error
