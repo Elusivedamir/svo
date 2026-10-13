@@ -54,6 +54,7 @@ func reset_test() -> void:
     for index in range(8):
         touch(index, center, false, true)
     world.returning = false
+    world._set_squad_selected(true)
     world.move_order_count = 0
     world.ball_pos = world.nav.get_point_position(Vector2i(100, 56))
     world.path.clear()
@@ -62,6 +63,10 @@ func reset_test() -> void:
     world.camera.zoom = Vector2.ONE * baseline_zoom
     world.camera.position = world.WORLD_SIZE * 0.5
     world._clamp_camera()
+
+func command_point() -> Vector2:
+    # A map order lies outside the squad selection target at viewport center.
+    return center + Vector2(180.0, 0.0)
 
 func seeded_path() -> PackedVector2Array:
     var points: PackedVector2Array = world.nav.get_point_path(Vector2i(100, 56), Vector2i(185, 61))
@@ -105,23 +110,23 @@ func test_taps() -> void:
     reset_test()
     world.camera.position = world.ball_pos
     world._clamp_camera()
-    touch(0, center, true)
-    touch(0, center, false)
+    touch(0, command_point(), true)
+    touch(0, command_point(), false)
     verify(world.move_order_count == 1 and not world.path.is_empty(), "single tap issues exactly one real movement order")
 
     reset_test()
     world.camera.position = world.ball_pos
     world._clamp_camera()
-    touch(4, center, true)
-    touch(4, center, false)
+    touch(4, command_point(), true)
+    touch(4, command_point(), false)
     verify(world.move_order_count == 1 and not world.path.is_empty(), "single touch works with a nonzero finger index")
 
     reset_test()
     world.camera.position = world.ball_pos
     world._clamp_camera()
-    touch(0, center, true)
-    drag(0, center + Vector2(3.0, 2.0), Vector2(3.0, 2.0))
-    touch(0, center + Vector2(3.0, 2.0), false)
+    touch(0, command_point(), true)
+    drag(0, command_point() + Vector2(3.0, 2.0), Vector2(3.0, 2.0))
+    touch(0, command_point() + Vector2(3.0, 2.0), false)
     verify(world.move_order_count == 1, "small finger jitter remains a single tap")
 
 func test_pan() -> void:
@@ -229,8 +234,8 @@ func test_release_orders() -> void:
             verify(unchanged_route(points), "pinch release order down=%s up=%s and remaining finger drag issue no order" % [reverse_down, reverse_up])
             world.camera.position = world.ball_pos
             world._clamp_camera()
-            touch(1, center, true)
-            touch(1, center, false)
+            touch(1, command_point(), true)
+            touch(1, command_point(), false)
             verify(world.move_order_count == 1, "fresh tap works after full pinch release down=%s up=%s" % [reverse_down, reverse_up])
 
 func test_cancel_and_extra_fingers() -> void:
@@ -263,8 +268,8 @@ func test_cancel_and_extra_fingers() -> void:
     verify(world.camera.zoom.x >= world.camera_min_zoom and world.camera.zoom.x <= world.camera_max_zoom and world.camera.position.is_finite(), "third finger leaves camera finite and zoom within bounds")
     world.camera.position = world.ball_pos
     world._clamp_camera()
-    touch(0, center, true)
-    touch(0, center, false)
+    touch(0, command_point(), true)
+    touch(0, command_point(), false)
     verify(world.move_order_count == 1, "fresh tap works after three-finger gesture")
 
 func test_focus() -> void:
@@ -315,8 +320,8 @@ func test_interrupt_cleanup() -> void:
     world._notification(Node.NOTIFICATION_APPLICATION_FOCUS_OUT)
     touch(0, center, false)
     verify(unchanged_route(points), "app focus loss cancels active touch without a movement order")
-    touch(0, center, true)
-    touch(0, center, false)
+    touch(0, command_point(), true)
+    touch(0, command_point(), false)
     verify(world.move_order_count == 1, "fresh tap works after app focus loss cleanup")
 
     reset_test()
@@ -341,8 +346,8 @@ func test_gui_routing() -> void:
 
     world.camera.position = world.ball_pos
     world._clamp_camera()
-    await route_touch(0, center, true)
-    await route_touch(0, center, false)
+    await route_touch(0, command_point(), true)
+    await route_touch(0, command_point(), false)
     verify(world.move_order_count == 1, "actual viewport routing delivers one map tap without emulated mouse duplication")
 
     reset_test()
@@ -359,8 +364,8 @@ func test_gui_routing() -> void:
     await route_drag(0, button_point, button_point - center - Vector2(70.0, 0.0))
     await route_touch(0, button_point, false)
     verify(unchanged_route(points), "map drag ending over focus button never issues a movement order")
-    await route_touch(0, center, true)
-    await route_touch(0, center, false)
+    await route_touch(0, command_point(), true)
+    await route_touch(0, command_point(), false)
     verify(world.move_order_count == 1, "map drag release over button leaves no stranded touch state")
 
     reset_test()
@@ -370,8 +375,8 @@ func test_gui_routing() -> void:
     await route_touch(1, button_point, false)
     await route_touch(0, center, false)
     verify(unchanged_route(points), "second finger on focus button suppresses original map tap")
-    await route_touch(0, center, true)
-    await route_touch(0, center, false)
+    await route_touch(0, command_point(), true)
+    await route_touch(0, command_point(), false)
     verify(world.move_order_count == 1, "map-plus-button gesture leaves fresh map taps usable")
 
     reset_test()
@@ -383,8 +388,8 @@ func test_gui_routing() -> void:
     await route_touch(0, button_point, false)
     await route_touch(1, positions[1], false)
     verify(unchanged_route(points), "pinch finger crossing focus button cannot issue a movement order")
-    await route_touch(0, center, true)
-    await route_touch(0, center, false)
+    await route_touch(0, command_point(), true)
+    await route_touch(0, command_point(), false)
     verify(world.move_order_count == 1, "pinch release over button leaves fresh map taps usable")
 
 func test_menu_cleanup() -> void:
@@ -405,8 +410,8 @@ func test_menu_cleanup() -> void:
     world.returning = false
     world.camera.position = world.ball_pos
     world._clamp_camera()
-    touch(0, center, true)
-    touch(0, center, false)
+    touch(0, command_point(), true)
+    touch(0, command_point(), false)
     verify(world.move_order_count == 1, "Back clears gesture state for later fresh input")
 
 func finish() -> void:

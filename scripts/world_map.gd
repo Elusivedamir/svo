@@ -1,9 +1,9 @@
 extends Node2D
 
-# v0.4: mobile camera controls over the verified v0.3.6 landscape.
-# Tap to pathfind, swipe to pan, pinch to zoom; camera controls never issue orders.
+# v0.5.1: first selectable infantry squad and the reviewed junction bridge.
+# ball_pos remains the navigation anchor for the existing regression tools.
 const MAP_TEXTURE: Texture2D = preload("res://assets/map/terrain_v0.3.4.png")
-const NAV_TEXTURE: Texture2D = preload("res://assets/map/navigation_v0.3.6.png")
+const NAV_TEXTURE: Texture2D = preload("res://assets/map/navigation_v0.5.1.png")
 const TERRAIN_CLARITY: Shader = preload("res://shaders/terrain_clarity.gdshader")
 const MENU_SCENE := "res://scenes/main_menu.tscn"
 const WORLD_SIZE := Vector2(12800.0, 7200.0)
@@ -36,6 +36,15 @@ var camera_max_zoom := 1.0
 var camera_view_initialized := false
 var camera_controls: CanvasLayer
 var focus_button: Button
+var squad_panel: PanelContainer
+var squad_status: Label
+var selection_button: Button
+var stop_button: Button
+var squad_selected := true
+var squad_notice := ""
+var squad_notice_timer := 0.0
+const SQUAD_MARKER_SIZE := Vector2(104.0, 84.0)
+const SQUAD_TOUCH_PADDING := 22.0
 var touch_points: Dictionary = {}
 var ui_touch_ids: Dictionary = {}
 var gesture_was_multi := false
@@ -119,10 +128,11 @@ func _ready() -> void:
 
     var spawn := Vector2i(100, 56)
     if nav.is_point_solid(spawn):
-        push_error("Test marker spawn is blocked")
+        push_error("Infantry squad spawn is blocked")
         return
     ball_pos = nav.get_point_position(spawn)
     _create_camera_controls()
+    print("SMOKE_SQUAD_READY")
     queue_redraw()
     print("SMOKE_MAP_READY")
     print("SMOKE_NAV_READY field/road/woods/houses/water/bridge: ", nav_size, "/", road, "/", wood, "/", buildings, "/", water, "/", bridges)
@@ -209,8 +219,8 @@ func _create_camera_controls() -> void:
     add_child(camera_controls)
     focus_button = Button.new()
     focus_button.name = "FocusMarker"
-    focus_button.text = "К ШАРИКУ"
-    focus_button.tooltip_text = "Вернуть камеру к шарику"
+    focus_button.text = "К ОТРЯДУ"
+    focus_button.tooltip_text = "Вернуть камеру к отряду"
     focus_button.focus_mode = Control.FOCUS_NONE
     focus_button.mouse_filter = Control.MOUSE_FILTER_STOP
     focus_button.add_theme_font_size_override("font_size", 28)
@@ -227,6 +237,51 @@ func _create_camera_controls() -> void:
     focus_button.add_theme_stylebox_override("hover", normal.duplicate())
     camera_controls.add_child(focus_button)
     focus_button.pressed.connect(_focus_marker)
+    squad_panel = PanelContainer.new()
+    squad_panel.name = "SquadPanel"
+    squad_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+    var panel_style := normal.duplicate() as StyleBoxFlat
+    panel_style.content_margin_left = 20.0
+    panel_style.content_margin_right = 20.0
+    panel_style.content_margin_top = 16.0
+    panel_style.content_margin_bottom = 16.0
+    squad_panel.add_theme_stylebox_override("panel", panel_style)
+    camera_controls.add_child(squad_panel)
+    var content := VBoxContainer.new()
+    content.add_theme_constant_override("separation", 12)
+    squad_panel.add_child(content)
+    var title := Label.new()
+    title.text = "ПЕХОТА 1"
+    title.add_theme_font_size_override("font_size", 30)
+    title.add_theme_color_override("font_color", Color("#c2ffe4"))
+    content.add_child(title)
+    squad_status = Label.new()
+    squad_status.add_theme_font_size_override("font_size", 26)
+    squad_status.add_theme_color_override("font_color", Color("#ecf5eb"))
+    content.add_child(squad_status)
+    var actions := HBoxContainer.new()
+    actions.add_theme_constant_override("separation", 14)
+    content.add_child(actions)
+    selection_button = Button.new()
+    selection_button.name = "SelectSquad"
+    selection_button.custom_minimum_size = Vector2(300.0, 82.0)
+    selection_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    stop_button = Button.new()
+    stop_button.name = "StopSquad"
+    stop_button.text = "СТОП"
+    stop_button.custom_minimum_size = Vector2(130.0, 82.0)
+    for button: Button in [selection_button, stop_button]:
+        button.focus_mode = Control.FOCUS_NONE
+        button.mouse_filter = Control.MOUSE_FILTER_STOP
+        button.add_theme_font_size_override("font_size", 26)
+        button.add_theme_color_override("font_color", Color("#ecf5eb"))
+        button.add_theme_stylebox_override("normal", normal.duplicate())
+        button.add_theme_stylebox_override("hover", normal.duplicate())
+        button.add_theme_stylebox_override("pressed", pressed.duplicate())
+        actions.add_child(button)
+    selection_button.pressed.connect(func() -> void: _set_squad_selected(not squad_selected))
+    stop_button.pressed.connect(_stop_squad)
+    _update_squad_hud()
     _layout_camera_controls()
 
 func _layout_camera_controls() -> void:
@@ -236,6 +291,57 @@ func _layout_camera_controls() -> void:
     var margin: float = clampf(minf(viewport.x, viewport.y) * 0.035, 12.0, 40.0)
     focus_button.size = Vector2(minf(360.0, maxf(160.0, viewport.x - margin * 2.0)), minf(112.0, maxf(56.0, viewport.y - margin * 2.0)))
     focus_button.position = Vector2(viewport.x - focus_button.size.x - margin, margin)
+    if is_instance_valid(squad_panel):
+        squad_panel.size = Vector2(520.0, 220.0)
+        squad_panel.position = Vector2(margin, viewport.y - squad_panel.size.y - margin)
+
+func _update_squad_hud() -> void:
+    if not is_instance_valid(squad_status):
+        return
+    var moving: bool = not path.is_empty() and path_next < path.size()
+    var status: String = "В пути" if moving else "Ожидает приказа"
+    if not squad_selected:
+        status = "Не выбран · " + status
+    if squad_notice_timer > 0.0:
+        status = squad_notice
+    if squad_status.text != status:
+        squad_status.text = status
+    selection_button.text = "Снять выбор" if squad_selected else "Выбрать отряд"
+    stop_button.disabled = not squad_selected or not moving
+
+func _set_squad_selected(value: bool) -> void:
+    _cancel_touch_gesture()
+    squad_selected = value
+    squad_notice_timer = 0.0
+    _update_squad_hud()
+    queue_redraw()
+
+func _stop_squad() -> void:
+    _cancel_touch_gesture()
+    if not squad_selected:
+        return
+    path.clear()
+    path_next = 0
+    blocked_timer = 0.0
+    squad_notice_timer = 0.0
+    _update_squad_hud()
+    queue_redraw()
+
+func _squad_screen_rect() -> Rect2:
+    if not is_instance_valid(camera):
+        return Rect2()
+    var center: Vector2 = get_viewport_rect().size * 0.5 + (ball_pos - camera.position) * camera.zoom
+    return Rect2(center - SQUAD_MARKER_SIZE * 0.5, SQUAD_MARKER_SIZE).grow(SQUAD_TOUCH_PADDING)
+
+func _handle_map_tap(screen_point: Vector2) -> void:
+    if _squad_screen_rect().has_point(screen_point):
+        _set_squad_selected(true)
+    elif squad_selected:
+        _request_move(screen_point)
+    else:
+        squad_notice = "Сначала выберите отряд"
+        squad_notice_timer = 1.8
+        _update_squad_hud()
 
 func _focus_marker() -> void:
     _cancel_touch_gesture()
@@ -245,7 +351,8 @@ func _focus_marker() -> void:
     _clamp_camera()
 
 func _camera_button_contains(screen_point: Vector2) -> bool:
-    return is_instance_valid(focus_button) and focus_button.visible and focus_button.get_global_rect().has_point(screen_point)
+    return ((is_instance_valid(focus_button) and focus_button.visible and focus_button.get_global_rect().has_point(screen_point))
+        or (is_instance_valid(squad_panel) and squad_panel.visible and squad_panel.get_global_rect().has_point(screen_point)))
 
 func _zoom_camera_at(screen_point: Vector2, factor: float) -> void:
     _transform_camera(screen_point, screen_point, factor)
@@ -310,7 +417,7 @@ func _finish_map_touch(e: InputEventScreenTouch, allow_tap: bool) -> void:
     if touch_points.is_empty():
         _cancel_touch_gesture()
         if can_order:
-            _request_move(e.position)
+            _handle_map_tap(e.position)
     elif touch_points.size() == 1:
         # After a pinch the remaining finger may pan, but cannot become a tap.
         gesture_was_multi = true
@@ -377,6 +484,7 @@ func _clamp_camera() -> void:
     var half_view: Vector2 = get_viewport_rect().size * 0.5 / camera.zoom
     camera.position.x = clampf(camera.position.x, minf(half_view.x, WORLD_SIZE.x * 0.5), maxf(WORLD_SIZE.x - half_view.x, WORLD_SIZE.x * 0.5))
     camera.position.y = clampf(camera.position.y, minf(half_view.y, WORLD_SIZE.y * 0.5), maxf(WORLD_SIZE.y - half_view.y, WORLD_SIZE.y * 0.5))
+    queue_redraw()
 
 func _cell_from_world(p: Vector2) -> Vector2i:
     return Vector2i(floori(p.x / nav_cell.x), floori(p.y / nav_cell.y))
@@ -391,6 +499,8 @@ func _type_at(p: Vector2) -> int:
     return int(nav_types[cell.y * nav_size.x + cell.x])
 
 func _request_move(screen_point: Vector2) -> void:
+    if not squad_selected:
+        return
     var world: Vector2 = _screen_to_world(screen_point)
     var dst: Vector2i = _cell_from_world(world)
     if not _inside(dst) or nav.is_point_solid(dst):
@@ -413,6 +523,8 @@ func _request_move(screen_point: Vector2) -> void:
     path = result
     path_next = 1 if path.size() > 1 else 0
     blocked_timer = 0.0
+    squad_notice_timer = 0.0
+    _update_squad_hud()
     queue_redraw()
 
 func _screen_to_world(screen_point: Vector2) -> Vector2:
@@ -422,9 +534,16 @@ func _screen_to_world(screen_point: Vector2) -> Vector2:
 func _reject(world: Vector2) -> void:
     blocked_at = world
     blocked_timer = 0.7
+    squad_notice = "Нет прохода к этой точке"
+    squad_notice_timer = 1.8
+    _update_squad_hud()
     queue_redraw()
 
 func _process(delta: float) -> void:
+    if squad_notice_timer > 0.0:
+        squad_notice_timer = maxf(0.0, squad_notice_timer - delta)
+        if squad_notice_timer == 0.0:
+            _update_squad_hud()
     if blocked_timer > 0.0:
         blocked_timer = maxf(0.0, blocked_timer - delta)
         queue_redraw()
@@ -448,20 +567,34 @@ func _process(delta: float) -> void:
         if path_next >= path.size():
             path.clear()
             path_next = 0
+            _update_squad_hud()
     queue_redraw()
 
 func _draw() -> void:
-    if path.size() > 0 and path_next < path.size():
+    if not is_instance_valid(camera):
+        return
+    var unit_scale: float = 1.0 / camera.zoom.x
+    if squad_selected and path.size() > 0 and path_next < path.size():
         var points := PackedVector2Array([ball_pos])
         for i in range(path_next, path.size()):
             points.append(path[i])
         if points.size() > 1:
-            draw_polyline(points, Color(0.18, 0.94, 0.72, 0.75), 9.0, true)
-    # World-space ring, intentionally neutral test marker rather than a soldier.
-    draw_circle(ball_pos + Vector2(10, 13), 52, Color(0.01, 0.03, 0.04, 0.55))
-    draw_circle(ball_pos, 48, Color(0.035, 0.22, 0.22, 0.93))
-    draw_circle(ball_pos, 38, Color(0.30, 0.98, 0.78))
-    draw_circle(ball_pos + Vector2(-9, -9), 12, Color(0.92, 1.0, 0.95, 0.90))
+            draw_polyline(points, Color(0.18, 0.94, 0.72, 0.75), 4.0 * unit_scale, true)
+        draw_circle(path[-1], 14.0 * unit_scale, Color(0.18, 0.94, 0.72, 0.9), false, 3.0 * unit_scale, true)
+    # A tactical infantry counter represents the whole squad, not individual soldiers.
+    var marker_size: Vector2 = SQUAD_MARKER_SIZE * unit_scale
+    var marker := Rect2(ball_pos - marker_size * 0.5, marker_size)
+    draw_rect(Rect2(marker.position + Vector2(5.0, 7.0) * unit_scale, marker.size), Color(0.01, 0.02, 0.025, 0.65))
+    if squad_selected:
+        draw_rect(marker.grow(9.0 * unit_scale), Color(0.88, 1.0, 0.68, 0.95), false, 3.0 * unit_scale)
+    draw_rect(marker, Color(0.035, 0.15, 0.13, 0.96))
+    draw_rect(marker, Color(0.39, 0.89, 0.70, 0.96), false, 3.0 * unit_scale)
+    var symbol := Rect2(ball_pos + Vector2(-31.0, -22.0) * unit_scale, Vector2(62.0, 36.0) * unit_scale)
+    var ink := Color(0.82, 1.0, 0.91, 1.0)
+    draw_rect(symbol, ink, false, 3.0 * unit_scale)
+    draw_line(symbol.position, symbol.end, ink, 3.0 * unit_scale, true)
+    draw_line(Vector2(symbol.end.x, symbol.position.y), Vector2(symbol.position.x, symbol.end.y), ink, 3.0 * unit_scale, true)
+    draw_string(ThemeDB.fallback_font, ball_pos + Vector2(-8.0, 34.0) * unit_scale, "1", HORIZONTAL_ALIGNMENT_LEFT, -1.0, maxi(1, roundi(22.0 * unit_scale)), ink)
     if blocked_timer > 0:
         draw_arc(blocked_at, 70.0 + (0.7-blocked_timer)*25.0, 0.0, TAU, 36, Color(1.0, 0.29, 0.23, blocked_timer), 12.0)
 
@@ -495,7 +628,8 @@ func _unhandled_input(event: InputEvent) -> void:
             return
         # Desktop / debugging support; Android touch is processed above.
         if e.pressed and e.button_index == MOUSE_BUTTON_LEFT and not touch_down:
-            _request_move(e.position)
+            if not _camera_button_contains(e.position):
+                _handle_map_tap(e.position)
             get_viewport().set_input_as_handled()
         elif e.pressed and (e.button_index == MOUSE_BUTTON_WHEEL_UP or e.button_index == MOUSE_BUTTON_WHEEL_DOWN):
             var scale_factor := 1.16 if e.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0 / 1.16

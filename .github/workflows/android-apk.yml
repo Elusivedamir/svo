@@ -78,7 +78,7 @@ jobs:
           python3 - <<'PYMAP'
           import struct
           from pathlib import Path
-          expect={"assets/map/terrain_v0.3.4.png":(3344,1882),"assets/map/navigation_v0.3.6.png":(418,236)}
+          expect={"assets/map/terrain_v0.3.4.png":(3344,1882),"assets/map/navigation_v0.3.6.png":(418,236),"assets/map/navigation_v0.5.1.png":(418,236)}
           for file,size in expect.items():
               b=Path(file).read_bytes()[:24]
               assert b[:8]==b"\x89PNG\r\n\x1a\n",file
@@ -171,12 +171,42 @@ jobs:
             exit 1
           fi
           grep -Fq 'PASS_CAMERA_V04' "$RUNNER_TEMP/camera_v04.log"
-          "$GODOT" --headless --path . --export-debug "Android" build/SVO-v0.4-debug.apk
-          test -s build/SVO-v0.4-debug.apk
+          # Selection and stop orders must work without changing touch/navigation behavior.
+          set +e
+          timeout 60s "$GODOT" --headless --audio-driver Dummy --path . --script res://tools/test_squad_v05.gd > "$RUNNER_TEMP/squad_v05.log" 2>&1
+          squad_exit=$?
+          set -e
+          cat "$RUNNER_TEMP/squad_v05.log"
+          if [[ "$squad_exit" != 0 ]]; then
+            echo "ERROR: v0.5 squad regression script exited with $squad_exit"
+            exit 1
+          fi
+          if grep -E 'SCRIPT ERROR:|Parse Error:|Invalid call\.|Failed to load script|SHADER ERROR:' "$RUNNER_TEMP/squad_v05.log"; then
+            echo "ERROR: v0.5 squad regression failed"
+            exit 1
+          fi
+          grep -Fq 'PASS_SQUAD_V05' "$RUNNER_TEMP/squad_v05.log"
+          # The visible junction bridge must connect both banks without opening adjacent water.
+          set +e
+          timeout 60s "$GODOT" --headless --audio-driver Dummy --path . --script res://tools/test_bridge_v051.gd > "$RUNNER_TEMP/bridge_v051.log" 2>&1
+          bridge_exit=$?
+          set -e
+          cat "$RUNNER_TEMP/bridge_v051.log"
+          if [[ "$bridge_exit" != 0 ]]; then
+            echo "ERROR: v0.5.1 bridge regression script exited with $bridge_exit"
+            exit 1
+          fi
+          if grep -E 'SCRIPT ERROR:|Parse Error:|Invalid call\.|Failed to load script|SHADER ERROR:' "$RUNNER_TEMP/bridge_v051.log"; then
+            echo "ERROR: v0.5.1 bridge regression failed"
+            exit 1
+          fi
+          grep -Fq 'PASS_BRIDGE_V051' "$RUNNER_TEMP/bridge_v051.log"
+          "$GODOT" --headless --path . --export-debug "Android" build/SVO-v0.5.1-debug.apk
+          test -s build/SVO-v0.5.1-debug.apk
 
       - name: Upload installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: SVO-v0.4-debug
-          path: build/SVO-v0.4-debug.apk
+          name: SVO-v0.5.1-debug
+          path: build/SVO-v0.5.1-debug.apk
           if-no-files-found: error
