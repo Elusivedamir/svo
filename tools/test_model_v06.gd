@@ -70,6 +70,16 @@ func test_setup() -> void:
     verify(not battle.relocate(0, Vector2(9000, 1800)), "deployment rejects enemy half")
     verify(battle.relocate(0, Vector2(2100, 2100)) and battle.structures[0].pos == battle.units[0].pos, "repositioning moves infantry and its own bunker together")
     verify(battle.relocate_post(Vector2(5000, 3500)) and battle.drone.pos == battle.structures[8].pos, "repositioning post moves the docked drone")
+    var saved: Vector2 = battle.units[0].pos
+    verify(not battle.relocate(0, battle.units[1].pos) and battle.units[0].pos == saved, "overlapping bunker positions are rejected without moving the group")
+    verify(not battle.relocate_post(battle.units[1].pos), "observation post cannot overlap another bunker")
+    var bridge_point := Vector2(2200, 2200)
+    var bridge_cell: Vector2i = battle._cell(bridge_point)
+    var bridge_index: int = bridge_cell.y * battle.nav_size.x + bridge_cell.x
+    var original: int = battle.nav_types[bridge_index]
+    battle.nav_types[bridge_index] = 5
+    verify(not battle.relocate(0, bridge_point), "bunker cannot occupy a walkable bridge")
+    battle.nav_types[bridge_index] = original
     verify(battle.start_battle(), "valid deployment starts the battle")
     verify(not battle.relocate(0, Vector2(1000, 1000)), "battle locks deployment")
 
@@ -122,7 +132,9 @@ func test_capture() -> void:
     battle.advance(20.1)
     verify(battle.structures[4].side == 0 and battle.supplies[0] == 200.0, "recapture never farms extra supplies")
     unit.pos = Vector2(100, 100)
-    verify(sector.owner == 0 and not battle.visibility.is_visible(sector.pos, 0, battle.units, battle.structures, battle.drone, battle.phase), "abandoned owned sector has no permanent observation")
+    verify(sector.owner == 0 and battle.visibility.is_visible(sector.pos, 0, battle.units, battle.structures, battle.drone, battle.phase), "owned sector stays visible after its group leaves")
+    sector.owner = 1
+    verify(not battle.visibility.is_visible(sector.pos, 0, battle.units, battle.structures, battle.drone, battle.phase), "enemy recapture restores fog in an empty sector")
     battle = fixture()
     battle.start_battle()
     unit = battle.units[0]

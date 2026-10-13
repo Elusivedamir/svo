@@ -20,6 +20,7 @@ var atmosphere: Polygon2D
 var fog_elapsed: float = FOG_INTERVAL
 var view_time := 0.0
 var last_phase := ""
+var last_ownership := ""
 var last_conditions := ""
 var _drone_sector_key := ""
 var _drone_sector := PackedVector2Array()
@@ -187,6 +188,7 @@ func refresh_fog() -> void:
             fog_texture.update(image)
     _update_atmosphere()
     last_phase = str(model.get("phase"))
+    last_ownership = _ownership_key()
     last_conditions = str(model.get("weather")) + "/" + str(model.get("time_of_day"))
     fog_elapsed = 0.0
 
@@ -203,13 +205,19 @@ func _update_atmosphere() -> void:
         shade.a = maxf(shade.a, 0.15)
     atmosphere.color = shade
 
+func _ownership_key() -> String:
+    var key := ""
+    for sector in model.get("sectors"):
+        key += str(sector.get("owner", -1)) + "/"
+    return key
+
 func _process(delta: float) -> void:
     if model == null:
         return
     view_time += delta
     fog_elapsed += delta
     var conditions := str(model.get("weather")) + "/" + str(model.get("time_of_day"))
-    if fog_elapsed >= FOG_INTERVAL or last_phase != str(model.get("phase")) or last_conditions != conditions:
+    if fog_elapsed >= FOG_INTERVAL or last_phase != str(model.get("phase")) or last_conditions != conditions or last_ownership != _ownership_key():
         refresh_fog()
     if is_instance_valid(fog_sprite):
         fog_sprite.visible = fog_enabled

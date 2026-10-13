@@ -3,12 +3,15 @@ extends SceneTree
 # End-to-end player flows through the production map and actual viewport GUI.
 # Simulation time is advanced deliberately, independently from CI frame speed.
 var world: Node2D
+var test_viewport: SubViewport
 var failures: Array[String] = []
 var check_count := 0
 var center := Vector2.ZERO
 var player_id := -1
 
 func _initialize() -> void:
+    root.content_scale_size = Vector2i(2400, 1108)
+    root.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_KEEP
     root.size = Vector2i(1280, 591)
     call_deferred("run_checks")
 
@@ -21,18 +24,18 @@ func verify(ok: bool, caption: String) -> void:
 func touch(index: int, point: Vector2, pressed: bool, canceled := false) -> void:
     var event := InputEventScreenTouch.new()
     event.index = index
-    event.position = root.get_screen_transform() * point
+    event.position = point
     event.pressed = pressed
     event.canceled = canceled
-    Input.parse_input_event(event)
+    test_viewport.push_input(event, true)
     await process_frame
 
 func drag(index: int, point: Vector2, relative: Vector2) -> void:
     var event := InputEventScreenDrag.new()
     event.index = index
-    event.position = root.get_screen_transform() * point
-    event.relative = root.get_screen_transform().basis_xform(relative)
-    Input.parse_input_event(event)
+    event.position = point
+    event.relative = relative
+    test_viewport.push_input(event, true)
     await process_frame
 
 func tap(point: Vector2, index := 0) -> void:
@@ -40,7 +43,19 @@ func tap(point: Vector2, index := 0) -> void:
     await touch(index, point, false)
 
 func press(button: Button) -> void:
-    await tap(button.get_global_rect().get_center())
+    var point := button.get_global_rect().get_center()
+    await touch(0, point, true)
+    # OS/Input normally synthesize these mouse events for Android UI touches.
+    # SubViewport.push_input exercises GUI routing without that OS layer.
+    for pressed in [true, false]:
+        var mouse := InputEventMouseButton.new()
+        mouse.device = -1
+        mouse.button_index = MOUSE_BUTTON_LEFT
+        mouse.position = point
+        mouse.pressed = pressed
+        test_viewport.push_input(mouse, true)
+        await process_frame
+    await touch(0, point, false)
 
 func screen(point: Vector2) -> Vector2:
     return center + (point - world.camera.position) * world.camera.zoom
@@ -86,8 +101,14 @@ func update_hud() -> void:
     world._update_battle_hud()
 
 func run_checks() -> void:
+    # Headless DisplayServer reports a square dummy window regardless of the
+    # requested resolution. Use a real independent landscape viewport instead.
+    test_viewport = SubViewport.new()
+    test_viewport.size = Vector2i(2400, 1108)
+    test_viewport.handle_input_locally = true
+    root.add_child(test_viewport)
     world = load("res://tools/battle_v06_probe.gd").new()
-    root.add_child(world)
+    test_viewport.add_child(world)
     world.set_process(false)
     await process_frame
     center = world.get_viewport_rect().size * 0.5
@@ -145,12 +166,16 @@ func test_preparation() -> void:
     world.camera.position = unit.pos
     world._clamp_camera()
     world.map_tap_count = 0
+    var initial: Vector2 = unit.pos
     await tap(screen(destination))
-    verify(unit.pos.distance_to(destination) < 0.1 and unit.path.is_empty(), "preparation map tap relocates the selected position without starting movement")
+    verify(world.placement_pending and world.placement_valid and unit.pos == initial, "preparation map tap previews the bunker without moving it")
+    await press(world.place_button)
+    verify(unit.pos.distance_to(destination) < 0.1 and unit.path.is_empty(), "confirm places selected bunker and infantry without starting movement")
     var old_position: Vector2 = unit.pos
     var forbidden := Vector2(world.WORLD_SIZE.x * 0.85, world.WORLD_SIZE.y * 0.5)
     world._handle_map_tap(screen(forbidden))
-    verify(unit.pos == old_position, "preparation cannot relocate a player position onto the enemy half")
+    verify(unit.pos == old_position and not world.placement_valid and world.place_button.disabled, "preparation rejects enemy half and disables confirmation")
+    await press(world.cancel_place_button)
     var post: Dictionary = {}
     for site in world.model.structures:
         if site.kind == "post" and int(site.side) == 0:
@@ -161,6 +186,7 @@ func test_preparation() -> void:
     world._clamp_camera()
     await press(world.post_button)
     await tap(screen(post_destination))
+    await press(world.place_button)
     verify(post.pos.distance_to(post_destination) < 0.1 and world.model.drone.pos.distance_to(post.pos) < 0.1, "preparation post selection relocates the observation post and its ready drone together")
     var all_arranged := true
     for index in range(world.unit_buttons.size()):
@@ -170,13 +196,25 @@ func test_preparation() -> void:
         world.camera.position = member.pos
         world._clamp_camera()
         await tap(screen(new_position))
+        await press(world.place_button)
         all_arranged = all_arranged and member.pos.distance_to(new_position) < 0.1
     verify(all_arranged and world.model.phase == "prepare", "player can independently adjust all four infantry positions before starting")
+    await press(world.unit_buttons[0])
+    var first: Dictionary = world.model.unit_by_id(0)
+    var saved_first: Vector2 = first.pos
+    world._handle_map_tap(screen(world.model.units[1].pos))
+    verify(world.selected_unit == 0 and not world.placement_valid and first.pos == saved_first, "placing onto another bunker neither changes selection nor overlaps positions")
+    await press(world.cancel_place_button)
+    verify(not world.placement_pending and first.pos == saved_first, "cancel clears the preview and preserves the placed bunker")
+    world._preview_placement(nearby_walkable(first.pos, Vector2i(5, 0)))
+    world._start_battle()
+    verify(world.model.phase == "prepare", "unconfirmed placement must be resolved before battle starts")
+    await press(world.cancel_place_button)
 
 func test_camera_and_interface() -> void:
     var bounds: Rect2 = world.get_viewport_rect()
     var buttons: Array = world.unit_buttons.duplicate()
-    buttons.append_array([world.drone_button, world.post_button, world.start_button, world.pause_button, world.focus_button])
+    buttons.append_array([world.drone_button, world.post_button, world.start_button, world.pause_button, world.focus_button, world.place_button, world.cancel_place_button, world.overview_button, world.conditions_button])
     for mode in world.mode_buttons.values():
         buttons.append(mode)
     var fits := true
@@ -186,7 +224,19 @@ func test_camera_and_interface() -> void:
             continue
         fits = fits and bounds.encloses(button.get_global_rect())
         minimum_touch = minimum_touch and button.size.y >= 56.0
-    verify(fits and minimum_touch, "visible interactive battle controls fit the viewport with usable touch targets")
+    verify(fits and minimum_touch, "visible interactive battle controls fit the landscape viewport with usable touch targets")
+    verify(bounds.size.y < 1200 and is_equal_approx(world.hud_panel.size.y, 236.0), "landscape test catches the original oversized panel")
+    verify(world.hud_panel.get_global_rect().position.y > bounds.size.y * 0.7, "bottom toolbar leaves more than seventy percent of map height open")
+    verify(not world.conditions_panel.visible, "weather controls are closed initially")
+    await press(world.conditions_button)
+    verify(world.conditions_panel.visible, "weather is accessible through an explicit small button")
+    await press(world.conditions_button)
+    verify(not world.conditions_panel.visible, "weather panel can be dismissed")
+    var panel_height: float = world.hud_panel.size.y
+    world.status_label.text = "Очень длинное сообщение ".repeat(200)
+    await process_frame
+    verify(world.hud_panel.size.y == panel_height, "long messages cannot enlarge the panel or block more map area")
+    update_hud()
     var unit: Dictionary = select_player()
     var before: Array = all_positions()
     world.map_tap_count = 0
@@ -210,7 +260,9 @@ func test_camera_and_interface() -> void:
     world._clamp_camera()
     var zoom_focus: Vector2 = world.camera.zoom
     await press(world.focus_button)
-    verify(screen(unit.pos).distance_to(center) < 0.1 and world.camera.zoom == zoom_focus and world.map_tap_count == 0, "actual focus button centers selected group and preserves zoom")
+    var half_view: Vector2 = center / world.camera.zoom
+    var expected := Vector2(clampf(unit.pos.x, half_view.x, world.WORLD_SIZE.x - half_view.x), clampf(unit.pos.y, half_view.y, world.WORLD_SIZE.y - half_view.y))
+    verify(world.camera.position.distance_to(expected) < 0.1 and world.camera.zoom == zoom_focus and world.map_tap_count == 0, "actual focus button brings selected group into view, respects map edges and preserves zoom")
 
 func test_start_and_pause() -> void:
     world.weather_option.select(1)
@@ -225,6 +277,11 @@ func test_start_and_pause() -> void:
     verify(world.weather_option.disabled and world.time_option.disabled, "weather and daylight selection lock after battle starts")
     verify(all_positions() == old_positions, "start button does not teleport any group")
     verify(world.model.visibility.weather == "rain" and world.model.visibility.time_of_day == "dusk", "selected preparation conditions reach the actual observation system")
+    verify(not world.conditions_panel.visible and not world.conditions_button.visible, "battle closes the setup-only weather panel")
+    await press(world.commands_button)
+    verify(not world.commands_open and is_equal_approx(world.hud_panel.size.y, 146) and not world.mode_buttons.capture.visible, "command row collapses to free additional map space")
+    await press(world.commands_button)
+    verify(world.commands_open and world.mode_buttons.capture.visible and is_equal_approx(world.hud_panel.size.y, 236), "command row can be restored without losing selection")
     world.model.ai_enabled = false
     world.model.combat_enabled = false
     await press(world.pause_button)
@@ -375,7 +432,14 @@ func test_drone_and_capture() -> void:
     advance(30.0)
     verify(is_equal_approx(float(world.model.supplies[0]), reward), "remaining on a captured bunker does not repeatedly produce supplies")
     group.pos = Vector2(100.0, 100.0)
-    verify(int(target_sector.owner) == 0 and not sees(target), "empty captured territory stays owned while its observation disappears")
+    verify(int(target_sector.owner) == 0 and sees(target), "empty captured territory remains visible while owned")
+    world.view.refresh_fog()
+    var before_key: String = world.view.last_ownership
+    target_sector.owner = 1
+    world.view._process(0.0)
+    verify(world.view.last_ownership != before_key and not sees(target), "enemy recapture refreshes fog immediately without waiting for its timer")
+    target_sector.owner = 0
+    world.view._process(0.0)
 
 func test_live_observation() -> void:
     # Detailed visibility/drone model regressions run separately; this scene
@@ -391,7 +455,7 @@ func test_live_observation() -> void:
         return
     var observer: Dictionary = world.model.unit_by_id(player_id)
     var observer_position: Vector2 = observer.pos
-    enemy.pos = world.model.sectors[2].pos
+    enemy.pos = world.model.sectors[3].pos
     observer.pos = enemy.pos
     verify(world.model.visibility.is_visible(enemy.pos, 0, world.model.units, world.model.structures, world.model.drone, world.model.phase), "nearby living group supplies current enemy observation")
     observer.pos = Vector2(1.0, 1.0)

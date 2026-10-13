@@ -225,12 +225,12 @@ jobs:
             fi
             grep -Fq "$marker" "$log"
           done
-          "$GODOT" --headless --path . --export-debug "Android" build/SVO-v0.6-debug.apk
-          test -s build/SVO-v0.6-debug.apk
+          "$GODOT" --headless --path . --export-debug "Android" build/SVO-v0.6.1-debug.apk
+          test -s build/SVO-v0.6.1-debug.apk
 
       - name: Upload installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: SVO-v0.6-debug
-          path: build/SVO-v0.6-debug.apk
+          name: SVO-v0.6.1-debug
+          path: build/SVO-v0.6.1-debug.apk
           if-no-files-found: error

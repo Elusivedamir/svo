@@ -1,7 +1,6 @@
 extends RefCounted
 
-# Deterministic fixed-step simulation. Ownership, observation and occupation
-# are independent: sectors and empty structures never create vision.
+# Deterministic fixed-step simulation with shared current sector ownership.
 const STEP := 0.05
 const CELL_ROAD := 1
 const CELL_WOODS := 2
@@ -97,6 +96,8 @@ func setup(nav_grid: AStarGrid2D, types: PackedByteArray, world: Vector2, visibi
         "kind": "post", "sector": sector_at(post_point), "rewarded": false})
     drone = {"side": 0, "pos": post_point, "target": post_point, "state": "ready",
         "heading": 0.0, "charge": 100.0, "planned": false}
+    if visibility != null:
+        visibility.set("sectors", sectors)
     _sync_conditions()
 
 func _sync_conditions() -> void:
@@ -210,12 +211,24 @@ func _fail(message: String) -> bool:
     last_error = message
     return false
 
+func can_place(point: Vector2, ignore_structure_id: int = -1) -> bool:
+    if not legal_point(point, 0):
+        return _fail("Нужна доступная суша на нашей половине")
+    if _terrain(point) == CELL_BRIDGE:
+        return _fail("Блиндаж и НП нельзя ставить на мосту")
+    var snapped: Vector2 = nav.get_point_position(_cell(point))
+    for structure in structures:
+        if int(structure.side) == 0 and int(structure.id) != ignore_structure_id and snapped.distance_to(structure.pos) < 180.0:
+            return _fail("Слишком близко к другой позиции")
+    last_error = ""
+    return true
+
 func relocate(id: int, point: Vector2) -> bool:
     var unit := unit_by_id(id)
     if phase != "prepare" or unit.is_empty() or int(unit.side) != 0:
         return _fail("Расстановка доступна до начала боя")
-    if not legal_point(point, 0):
-        return _fail("Выберите доступное место на нашей половине")
+    if not can_place(point, int(unit.home)):
+        return false
     var snapped: Vector2 = nav.get_point_position(_cell(point))
     for structure in structures:
         if int(structure.id) == int(unit.home):
@@ -231,8 +244,10 @@ func relocate(id: int, point: Vector2) -> bool:
     return true
 
 func relocate_post(point: Vector2) -> bool:
-    if phase != "prepare" or not legal_point(point, 0):
+    if phase != "prepare":
         return _fail("Пост ставится на доступной земле нашей половины")
+    if not can_place(point, 8):
+        return false
     var snapped: Vector2 = nav.get_point_position(_cell(point))
     structures[8].pos = snapped
     structures[8].sector = sector_at(snapped)

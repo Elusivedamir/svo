@@ -13,9 +13,9 @@ var selected_unit := 0
 var selected_drone := false
 var selected_post := false
 var command_mode := "move"
-var hud_panel: PanelContainer
-var territory_panel: PanelContainer
-var conditions_panel: PanelContainer
+var hud_panel: Panel
+var territory_panel: Panel
+var conditions_panel: Panel
 var territory_label: Label
 var phase_label: Label
 var status_label: Label
@@ -28,6 +28,17 @@ var unit_buttons: Array[Button] = []
 var drone_button: Button
 var post_button: Button
 var mode_buttons: Dictionary = {}
+var place_button: Button
+var cancel_place_button: Button
+var overview_button: Button
+var conditions_button: Button
+var commands_button: Button
+var conditions_open := false
+var commands_open := true
+var placement_pending := false
+var placement_point := Vector2.ZERO
+var placement_valid := false
+var arranged_positions: Dictionary = {}
 var _hud_timer := 0.0
 var _battle_message := ""
 var _message_timer := 0.0
@@ -54,8 +65,9 @@ func _create_camera_controls() -> void:
     _select_unit(0)
     print("SMOKE_BATTLE_READY")
 
-func _panel(name_text: String) -> PanelContainer:
-    var panel := PanelContainer.new()
+func _panel(name_text: String) -> Panel:
+    # Fixed panel bounds: wrapped text must never resize the touch-blocking background.
+    var panel := Panel.new()
     panel.name = name_text
     panel.mouse_filter = Control.MOUSE_FILTER_STOP
     var style := StyleBoxFlat.new()
@@ -108,80 +120,65 @@ func _build_battle_hud() -> void:
     camera_controls.layer = 20
     add_child(camera_controls)
     territory_panel = _panel("Territory")
-    var territory_box := VBoxContainer.new()
-    territory_panel.add_child(territory_box)
     territory_label = _label("НАШИ 50%   |   ПРОТИВНИК 50%", 28)
     territory_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-    territory_box.add_child(territory_label)
+    territory_panel.add_child(territory_label)
     phase_label = _label("ПОДГОТОВКА · БЕЗ ТАЙМЕРА", 24)
     phase_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-    territory_box.add_child(phase_label)
-
+    territory_panel.add_child(phase_label)
     conditions_panel = _panel("Conditions")
-    var condition_box := VBoxContainer.new()
-    condition_box.add_theme_constant_override("separation", 8)
-    conditions_panel.add_child(condition_box)
-    condition_box.add_child(_label("УСЛОВИЯ БОЯ", 24))
-    var choices := HBoxContainer.new()
-    choices.add_theme_constant_override("separation", 12)
-    condition_box.add_child(choices)
     weather_option = OptionButton.new()
     weather_option.name = "Weather"
     time_option = OptionButton.new()
     time_option.name = "TimeOfDay"
     for option: OptionButton in [weather_option, time_option]:
-        option.custom_minimum_size = Vector2(220, 64)
-        option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
         option.focus_mode = Control.FOCUS_NONE
         option.add_theme_font_size_override("font_size", 26)
-        choices.add_child(option)
+        conditions_panel.add_child(option)
     for text_value: String in ["Ясно", "Дождь", "Туман"]:
         weather_option.add_item(text_value)
     for text_value: String in ["День", "Сумерки", "Ночь"]:
         time_option.add_item(text_value)
     weather_option.item_selected.connect(_set_weather)
     time_option.item_selected.connect(_set_time)
-
     focus_button = _button("К ОТРЯДУ", "FocusMarker", _focus_marker, Vector2(320, 88))
-    camera_controls.add_child(focus_button)
     start_button = _button("НАЧАТЬ БОЙ", "StartBattle", _start_battle, Vector2(360, 88))
-    camera_controls.add_child(start_button)
     pause_button = _button("ПАУЗА", "PauseBattle", _toggle_pause, Vector2(360, 88))
-    camera_controls.add_child(pause_button)
-
+    overview_button = _button("НАШЕ ПОЛЕ", "Overview", _overview, Vector2(300, 88))
+    conditions_button = _button("ПОГОДА / ВРЕМЯ", "ConditionsToggle", _toggle_conditions, Vector2(300, 88))
+    for button in [focus_button, start_button, pause_button, overview_button, conditions_button]:
+        camera_controls.add_child(button)
     hud_panel = _panel("BattlePanel")
-    var content := VBoxContainer.new()
-    content.add_theme_constant_override("separation", 8)
-    hud_panel.add_child(content)
-    var selectors := HBoxContainer.new()
-    selectors.add_theme_constant_override("separation", 8)
-    content.add_child(selectors)
     for id in range(4):
-        var button := _button("Гр. " + str(id + 1), "Group" + str(id + 1), _select_unit.bind(id), Vector2(85, 62))
-        selectors.add_child(button)
+        var button := _button("Блиндаж " + str(id + 1), "Group" + str(id + 1), _select_unit.bind(id), Vector2(190, 82))
+        hud_panel.add_child(button)
         unit_buttons.append(button)
-    drone_button = _button("Дрон", "SelectDrone", _select_drone, Vector2(104, 62))
-    post_button = _button("НП", "SelectPost", _select_post, Vector2(82, 62))
-    selectors.add_child(drone_button)
-    selectors.add_child(post_button)
-    selection_label = _label("ГРУППА 1", 26)
-    content.add_child(selection_label)
-    status_label = _label("Переставьте позиции на своей половине", 24)
-    status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    status_label.custom_minimum_size.y = 64.0
-    content.add_child(status_label)
-    var commands := GridContainer.new()
-    commands.columns = 4
-    commands.add_theme_constant_override("h_separation", 8)
-    commands.add_theme_constant_override("v_separation", 8)
-    content.add_child(commands)
+    drone_button = _button("Дрон", "SelectDrone", _select_drone, Vector2(150, 82))
+    post_button = _button("НП", "SelectPost", _select_post, Vector2(150, 82))
+    commands_button = _button("ПРИКАЗЫ ▾", "CommandsToggle", _toggle_commands, Vector2(210, 82))
+    for button in [drone_button, post_button, commands_button]:
+        hud_panel.add_child(button)
+    selection_label = _label("БЛИНДАЖ 1", 26)
+    selection_label.clip_text = true
+    hud_panel.add_child(selection_label)
+    status_label = _label("Выберите блиндаж, затем место на карте", 24)
+    status_label.clip_text = true
+    hud_panel.add_child(status_label)
+    place_button = _button("ПОСТАВИТЬ", "ConfirmPlacement", _confirm_placement, Vector2(280, 80))
+    cancel_place_button = _button("ОТМЕНА", "CancelPlacement", _cancel_placement, Vector2(220, 80))
+    hud_panel.add_child(place_button)
+    hud_panel.add_child(cancel_place_button)
     var captions := {"move": "Двигаться", "capture": "Занять", "assault": "Штурм", "stop": "СТОП", "fortify": "Закрепиться", "reinforce": "Пополнить", "resupply": "Боезапас", "return_drone": "Вернуть дрон"}
     for key: String in captions:
-        var button := _button(captions[key], key, _choose_command.bind(key))
-        commands.add_child(button)
+        var button := _button(captions[key], key, _choose_command.bind(key), Vector2(150, 80))
+        hud_panel.add_child(button)
         mode_buttons[key] = button
-    _layout_camera_controls()
     _update_battle_hud()
+    _layout_camera_controls()
+
+func _rect(control: Control, position_value: Vector2, size_value: Vector2) -> void:
+    control.position = position_value
+    control.size = size_value
 
 func _layout_camera_controls() -> void:
     if legacy_regression_mode:
@@ -190,30 +187,91 @@ func _layout_camera_controls() -> void:
     if not is_instance_valid(hud_panel):
         return
     var viewport: Vector2 = get_viewport_rect().size
-    var margin: float = clampf(minf(viewport.x, viewport.y) * 0.03, 12.0, 34.0)
-    hud_panel.size = Vector2(760.0, 360.0)
-    hud_panel.position = Vector2(margin, viewport.y - hud_panel.size.y - margin)
-    territory_panel.size = Vector2(600, 106)
-    territory_panel.position = Vector2((viewport.x - territory_panel.size.x) * 0.5, margin)
-    conditions_panel.size = Vector2(500, 130)
-    conditions_panel.position = Vector2(margin, margin)
-    focus_button.size = Vector2(320, 88)
-    focus_button.position = Vector2(viewport.x - focus_button.size.x - margin, margin)
-    start_button.size = Vector2(360, 88)
-    start_button.position = Vector2(viewport.x - start_button.size.x - margin, margin + 102)
-    pause_button.size = start_button.size
-    pause_button.position = start_button.position
+    var margin: float = clampf(minf(viewport.x, viewport.y) * 0.02, 12.0, 24.0)
+    var width := minf(2040.0, viewport.x - margin * 2.0)
+    var expanded: bool = model != null and (model.phase == "prepare" or commands_open)
+    _rect(hud_panel, Vector2((viewport.x - width) * 0.5, viewport.y - (236.0 if expanded else 146.0) - margin), Vector2(width, 236.0 if expanded else 146.0))
+    var selector_width := (width - 32.0 - 6.0 * 8.0) / 7.0
+    var selectors: Array = unit_buttons.duplicate()
+    selectors.append_array([drone_button, post_button, commands_button])
+    for index in range(selectors.size()):
+        _rect(selectors[index], Vector2(16.0 + index * (selector_width + 8.0), 12.0), Vector2(selector_width, 82.0))
+    _rect(selection_label, Vector2(16, 101), Vector2(width * 0.4 - 16, 38))
+    _rect(status_label, Vector2(width * 0.4, 101), Vector2(width * 0.6 - 16, 38))
+    var command_width := (width - 32.0 - 7.0 * 8.0) / 8.0
+    var index := 0
+    for button in mode_buttons.values():
+        _rect(button, Vector2(16 + index * (command_width + 8), 146), Vector2(command_width, 80))
+        index += 1
+    _rect(place_button, Vector2(16, 146), Vector2(360, 80))
+    _rect(cancel_place_button, Vector2(388, 146), Vector2(240, 80))
+    _rect(territory_panel, Vector2((viewport.x - 600.0) * 0.5, margin), Vector2(600, 106))
+    _rect(territory_label, Vector2(12, 10), Vector2(576, 42))
+    _rect(phase_label, Vector2(12, 57), Vector2(576, 36))
+    _rect(overview_button, Vector2(margin, margin), Vector2(300, 88))
+    _rect(conditions_button, Vector2(margin, margin + 100), Vector2(300, 88))
+    _rect(conditions_panel, Vector2(margin, margin + 200), Vector2(500, 106))
+    _rect(weather_option, Vector2(12, 12), Vector2(232, 82))
+    _rect(time_option, Vector2(256, 12), Vector2(232, 82))
+    _rect(focus_button, Vector2(viewport.x - 360 - margin, margin), Vector2(360, 88))
+    _rect(start_button, Vector2(viewport.x - 360 - margin, margin + 100), Vector2(360, 88))
+    _rect(pause_button, start_button.position, start_button.size)
+
+func _toggle_conditions() -> void:
+    _cancel_touch_gesture()
+    conditions_open = not conditions_open
+    _update_battle_hud()
+
+func _toggle_commands() -> void:
+    _cancel_touch_gesture()
+    commands_open = not commands_open
+    _update_battle_hud()
+    _layout_camera_controls()
+
+func _overview() -> void:
+    _cancel_touch_gesture()
+    camera.zoom = Vector2.ONE * clampf(minf(get_viewport_rect().size.x / (WORLD_SIZE.x * 0.55), get_viewport_rect().size.y / WORLD_SIZE.y), camera_min_zoom, camera_max_zoom)
+    camera.position = WORLD_SIZE * Vector2(0.25, 0.5)
+    _clamp_camera()
+
+func _cancel_placement() -> void:
+    placement_pending = false
+    placement_valid = false
+    queue_redraw()
+    _update_battle_hud()
+
+func _preview_placement(point: Vector2) -> void:
+    placement_point = point
+    placement_pending = true
+    placement_valid = model.can_place(point, 8 if selected_post else selected_unit)
+    if placement_valid:
+        placement_point = nav.get_point_position(_cell_from_world(point))
+    _update_battle_hud()
+    queue_redraw()
+
+func _confirm_placement() -> void:
+    _cancel_touch_gesture()
+    if model == null or model.phase != "prepare" or not placement_pending or not placement_valid:
+        return
+    var accepted: bool = model.relocate_post(placement_point) if selected_post else model.relocate(selected_unit, placement_point)
+    if accepted:
+        arranged_positions["post" if selected_post else str(selected_unit)] = true
+        _cancel_placement()
+        _notice("Позиция поставлена. Выберите следующий блиндаж")
+    else:
+        _notice(str(model.last_error))
 
 func _camera_button_contains(screen_point: Vector2) -> bool:
     if legacy_regression_mode:
         return super._camera_button_contains(screen_point)
-    for control in [hud_panel, territory_panel, conditions_panel, focus_button, start_button, pause_button]:
+    for control in [hud_panel, territory_panel, conditions_panel, focus_button, start_button, pause_button, overview_button, conditions_button]:
         if is_instance_valid(control) and control.visible and control.get_global_rect().has_point(screen_point):
             return true
     return false
 
 func _select_unit(id: int) -> void:
     _cancel_touch_gesture()
+    _cancel_placement()
     selected_unit = id
     selected_drone = false
     selected_post = false
@@ -222,6 +280,7 @@ func _select_unit(id: int) -> void:
 
 func _select_drone() -> void:
     _cancel_touch_gesture()
+    _cancel_placement()
     selected_unit = -1
     selected_drone = true
     selected_post = false
@@ -230,6 +289,7 @@ func _select_drone() -> void:
 
 func _select_post() -> void:
     _cancel_touch_gesture()
+    _cancel_placement()
     selected_unit = -1
     selected_drone = false
     selected_post = true
@@ -285,6 +345,11 @@ func _handle_map_tap(screen_point: Vector2) -> void:
     if model == null or model.phase == "ended" or model.paused:
         return
     var point: Vector2 = _screen_to_world(screen_point)
+    # In setup the explicitly selected bunker wins over marker hit tests.
+    # A nearby group must not silently change the position being placed.
+    if model.phase == "prepare" and not selected_drone and (selected_unit >= 0 or selected_post):
+        _preview_placement(point)
+        return
     var hit: int = view.squad_hit_test(point, camera.zoom.x)
     if hit >= 0:
         var unit: Dictionary = model.unit_by_id(hit)
@@ -365,10 +430,14 @@ func _start_battle() -> void:
     if model.phase == "ended":
         var visibility = model.visibility
         model.setup(nav, nav_types, WORLD_SIZE, visibility, battle_config)
+        arranged_positions.clear()
+        _cancel_placement()
         weather_option.select(0)
         time_option.select(0)
         _select_unit(0)
         _focus_marker()
+    elif placement_pending:
+        _notice("Сначала поставьте позицию или отмените выбор места")
     elif not model.start_battle():
         _notice("Все четыре группы и НП должны стоять на допустимых местах")
     _update_battle_hud()
@@ -411,14 +480,23 @@ func _update_battle_hud() -> void:
     start_button.text = "ЗАНОВО" if ended else "НАЧАТЬ БОЙ"
     pause_button.visible = not preparing and not ended
     pause_button.text = "ПРОДОЛЖИТЬ" if model.paused else "ПАУЗА"
+    conditions_button.visible = preparing
+    conditions_panel.visible = preparing and conditions_open
+    place_button.visible = preparing and not selected_drone
+    cancel_place_button.visible = preparing and not selected_drone
+    place_button.disabled = not placement_pending or not placement_valid or selected_drone
+    cancel_place_button.disabled = not placement_pending
+    commands_button.visible = not preparing
+    commands_button.text = "ПРИКАЗЫ ▴" if commands_open else "ПРИКАЗЫ ▾"
     weather_option.disabled = not preparing
     time_option.disabled = not preparing
     for id in range(unit_buttons.size()):
         var unit: Dictionary = model.unit_by_id(id)
         var count: int = model.alive_count(unit) if not unit.is_empty() else 0
-        unit_buttons[id].text = "Гр.%d %d" % [id + 1, count]
+        unit_buttons[id].text = ("Блиндаж %d%s" % [id + 1, " ✓" if arranged_positions.has(str(id)) else ""]) if preparing else "Группа %d · %d" % [id + 1, count]
+        unit_buttons[id].modulate = Color("#80ffd0") if id == selected_unit else Color.WHITE
         unit_buttons[id].disabled = count == 0
-    focus_button.text = "К ДРОНУ" if selected_drone else ("К НП" if selected_post else "К ОТРЯДУ")
+    focus_button.text = "К ДРОНУ" if selected_drone else ("К НП" if selected_post else ("К БЛИНДАЖУ" if preparing else "К ОТРЯДУ"))
     var status := ""
     if selected_drone:
         var states := {"ready": "Готов", "flying": "Летит", "observing": "Наблюдает", "returning": "Возвращается", "charging": "Заряжается"}
@@ -430,15 +508,17 @@ func _update_battle_hud() -> void:
     elif selected_unit >= 0:
         var unit: Dictionary = model.unit_by_id(selected_unit)
         if not unit.is_empty():
-            selection_label.text = "ГРУППА %d · %d/%d · БОЕЗАПАС %d" % [selected_unit + 1, model.alive_count(unit), int(battle_config.get("squad_size", 6)), roundi(float(unit.ammo))]
+            selection_label.text = ("БЛИНДАЖ %d · ВЫБЕРИТЕ МЕСТО" % [selected_unit + 1]) if preparing else "ГРУППА %d · %d/%d · БЗ %d" % [selected_unit + 1, model.alive_count(unit), int(battle_config.get("squad_size", 6)), roundi(float(unit.ammo))]
             var orders := {"idle": "Ожидает", "move": "Движется", "capture": "Захватывает", "fortify": "Закрепляется", "dead": "Уничтожена", "hold": "Удерживает"}
-            status = "Тап: переставить позицию на своей половине" if preparing else str(orders.get(unit.order, unit.order))
+            status = "Тап по карте → «Поставить»" if preparing else str(orders.get(unit.order, unit.order))
             if model.alive_count(unit) == 0:
                 status = "Группа уничтожена"
     else:
         selection_label.text = "ВЫБЕРИТЕ ГРУППУ ИЛИ ДРОН"
     if _message_timer > 0.0:
         status = _battle_message
+    if preparing and placement_pending:
+        status = "Место выбрано → «Поставить»" if placement_valid else str(model.last_error)
     status_label.text = status + " · Снабжение %d" % roundi(float(model.supplies[0]))
     if ended:
         var survivors := 0
@@ -449,6 +529,7 @@ func _update_battle_hud() -> void:
         status_label.text = "Наши потери: %d из %d. Нажмите «Заново»" % [roster - survivors, roster]
     for key in mode_buttons:
         var button: Button = mode_buttons[key]
+        button.visible = (not preparing and commands_open) or (preparing and selected_drone and key in ["move", "capture", "return_drone"])
         button.disabled = ended or model.paused
         if selected_drone:
             button.disabled = button.disabled or key not in ["move", "capture", "stop", "return_drone"]
@@ -460,6 +541,7 @@ func _update_battle_hud() -> void:
                 button.disabled = button.disabled or model.alive_count(model.unit_by_id(selected_unit)) == 0
     mode_buttons["move"].text = "Переставить" if preparing and not selected_drone else "Двигаться"
     mode_buttons["capture"].text = "Сектор" if selected_drone else "Занять"
+    _layout_camera_controls()
 
 func _notification(what: int) -> void:
     super._notification(what)
@@ -471,5 +553,13 @@ func _notification(what: int) -> void:
 func _draw() -> void:
     if legacy_regression_mode:
         super._draw()
-    elif blocked_timer > 0.0 and is_instance_valid(camera):
-        draw_arc(blocked_at, 24.0 / camera.zoom.x, 0.0, TAU, 32, Color(1.0, 0.30, 0.25, blocked_timer), 4.0 / camera.zoom.x, true)
+    elif is_instance_valid(camera):
+        if placement_pending:
+            var color := Color(0.3, 1.0, 0.65, 0.9) if placement_valid else Color(1.0, 0.25, 0.2, 0.9)
+            var radius := 42.0 / camera.zoom.x
+            draw_circle(placement_point, radius, Color(color, 0.16))
+            draw_arc(placement_point, radius, 0.0, TAU, 48, color, 3.0 / camera.zoom.x, true)
+            var ghost_size := Vector2(54, 32) / camera.zoom
+            draw_rect(Rect2(placement_point - ghost_size * 0.5, ghost_size), color, false, 3.0 / camera.zoom.x)
+        if blocked_timer > 0.0:
+            draw_arc(blocked_at, 24.0 / camera.zoom.x, 0.0, TAU, 32, Color(1.0, 0.30, 0.25, blocked_timer), 4.0 / camera.zoom.x, true)

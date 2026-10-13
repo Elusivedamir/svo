@@ -47,7 +47,7 @@ func run_checks() -> void:
     verify(visible(Vector2(3999.0, 100.0), [], [], {}, "preparation", 1), "enemy preparation reveals its own half")
     verify(not visible(Vector2(1999.0, 100.0), [], [], {}, "prep", 1), "enemy preparation never sees friendly half")
     verify(not visible(Vector2(1000.0, 1200.0), [], structures), "empty owned bunker never supplies vision")
-    verify(not visible(Vector2(500.0, 100.0), []), "empty friendly territory regains fog during battle")
+    verify(not visible(Vector2(500.0, 100.0), []), "without ownership data, empty ground is not inferred to be friendly")
     verify(visible(Vector2(2090.0, 1200.0), [unit]), "live friendly group can see across original boundary")
     verify(not visible(Vector2(2110.0, 1200.0), [unit]), "infantry vision stops beyond configured radius")
     verify(not visible(Vector2(-1.0, 1200.0), [unit]), "outside world remains hidden")
@@ -161,6 +161,39 @@ func run_checks() -> void:
             if (image.get_pixel(x, y).a == 0.0) != visible(point, observers, structures, drone):
                 disagreement += 1
     verify(disagreement == 0, "every fog raster sample equals actual enemy detection")
+    var territory: Array = [
+        {"rect": Rect2(0, 0, 2000, 2400), "owner": 0},
+        {"rect": Rect2(2000, 0, 2000, 2400), "owner": 1}]
+    visibility.sectors = territory
+    var home_point := Vector2(100, 100)
+    var away_point := Vector2(3500, 100)
+    verify(visible(home_point, []), "empty owned half is always visible during battle")
+    verify(not visible(away_point, []), "enemy territory stays hidden without current observers")
+    verify(visible(away_point, [], [], {}, "battle", 1), "bot also sees its owned territory")
+    visibility.weather = "fog"
+    visibility.time_of_day = "night"
+    verify(visible(home_point, []), "weather and darkness cannot cover owned territory with war fog")
+    image = visibility.build_fog_image([], [], {}, "battle", Vector2i(80, 48))
+    verify(fog_alpha(image, home_point) == 0 and fog_alpha(image, away_point) > 0.8, "fog raster opens owned ground and covers enemy ground")
+    territory[0].owner = 1
+    verify(not visible(home_point, []), "enemy capture immediately hides formerly owned territory")
+    var nearby: Dictionary = unit.duplicate(true)
+    nearby.pos = home_point
+    verify(visible(home_point, [nearby]), "group can observe lost ground while it remains there")
+    image = visibility.build_fog_image([], [], {}, "battle", Vector2i(80, 48))
+    verify(fog_alpha(image, home_point) > 0.8, "fresh raster closes enemy-captured ground")
+    territory[1].owner = 0
+    verify(visible(away_point, []), "newly captured territory becomes permanently open while owned")
+    image = visibility.build_fog_image([], [], {}, "battle", Vector2i(80, 48))
+    verify(fog_alpha(image, away_point) == 0, "raster reveals captured enemy ground without a garrison")
+    var mismatch := 0
+    for y in range(48):
+        for x in range(80):
+            var point := Vector2((x + 0.5) * 50, (y + 0.5) * 50)
+            if (image.get_pixel(x, y).a == 0) != visible(point, []):
+                mismatch += 1
+    verify(mismatch == 0, "all ownership fog samples agree with detection")
+    visibility.sectors = []
     visibility.setup(grid, kinds, Vector2(4000.0, 2400.0), {"infantry_view": 500.0, "drone_view": 800.0, "drone_angle": 60.0, "boundary_x": 1000.0})
     verify(is_equal_approx(visibility.observation_radius(unit, []), 500.0) and is_equal_approx(visibility.drone_radius(), 800.0), "balance config controls observation ranges")
     verify(not visible(Vector2(1500.0, 1200.0), [], [], {}, "prep"), "configured boundary is honored")

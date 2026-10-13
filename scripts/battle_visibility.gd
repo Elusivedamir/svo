@@ -1,7 +1,7 @@
 extends RefCounted
 
-# Strict current observation. Ownership is never an observation source.
-# The same queries are used for bot decisions, combat and the displayed fog.
+# Owned territory stays open until captured. Outside it only current observers
+# reveal units and terrain. Combat still checks physical line of sight.
 const CELL_WOODS := 2
 const CELL_HOUSE := 3
 const HIDDEN_ALPHA := 0.86
@@ -23,6 +23,7 @@ var drone_angle := deg_to_rad(100.0)
 var occupied_radius := 220.0
 var woods_depth := 320.0
 var drone_woods_depth := 180.0
+var sectors: Array = []
 
 func setup(nav_grid: AStarGrid2D, types: PackedByteArray, world: Vector2, config: Dictionary) -> void:
     nav = nav_grid
@@ -189,9 +190,18 @@ func is_visible(point: Vector2, side: int, units: Array, structures: Array, dron
         return false
     if phase == "prepare" or phase == "prep" or phase == "preparation":
         return point.x < boundary_x if side == 0 else point.x >= boundary_x
+    if territory_visible(point, side):
+        return true
     for source in observation_sources(side, units, structures, drone):
         if _source_sees(source, point):
             return true
+    return false
+
+func territory_visible(point: Vector2, side: int) -> bool:
+    for sector in sectors:
+        var rect: Rect2 = sector.get("rect", Rect2())
+        if rect.has_point(point):
+            return int(sector.get("owner", -1)) == side
     return false
 
 func build_fog_image(units: Array, structures: Array, drone: Dictionary, phase: String, resolution: Vector2i = Vector2i(128, 72)) -> Image:
@@ -208,6 +218,11 @@ func build_fog_image(units: Array, structures: Array, drone: Dictionary, phase: 
                 if (float(x) + 0.5) * pixel_size.x < boundary_x:
                     bytes[(y * resolution.x + x) * 4 + 3] = 0
     else:
+        for y in range(resolution.y):
+            for x in range(resolution.x):
+                var point := (Vector2(x, y) + Vector2.ONE * 0.5) * pixel_size
+                if territory_visible(point, 0):
+                    bytes[(y * resolution.x + x) * 4 + 3] = 0
         # Work only inside each source's bounding box. Unobserved pixels never
         # call LOS, and already revealed pixels skip overlapping observers.
         for source in observation_sources(0, units, structures, drone):
