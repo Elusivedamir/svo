@@ -1,0 +1,38 @@
+{
+  "id": "field_sector_alpha",
+  "version": 1,
+  "fictional": true,
+  "coordinate_system": "local_2d",
+  "world_size": [6400, 3600],
+  "art_texture_size": [3200, 1800],
+  "art_pixels_to_world": 2.0,
+  "setting": "Fictional Eastern European agricultural landscape",
+  "layers": {
+    "fields": [
+      {"id":"f01","type":"fallow","center":[1050,500]},
+      {"id":"f02","type":"harvested","center":[3250,490]},
+      {"id":"f03","type":"young_crop","center":[5650,650]},
+      {"id":"f04","type":"stubble","center":[850,1920]},
+      {"id":"f05","type":"grass","center":[3100,1920]},
+      {"id":"f06","type":"dry_grass","center":[5620,1970]},
+      {"id":"f07","type":"meadow","center":[900,3200]},
+      {"id":"f08","type":"harvested","center":[3700,3210]},
+      {"id":"f09","type":"fallow","center":[5700,3220]}
+    ],
+    "forest_belts": [
+      {"id":"belt_north","description":"east-west tree line"},
+      {"id":"belt_south","description":"east-west tree line"},
+      {"id":"belt_west","description":"north-south tree line"},
+      {"id":"belt_mid","description":"north-south tree line"},
+      {"id":"belt_east","description":"north-south tree line"}
+    ],
+    "dirt_roads": [
+      {"id":"road_central","description":"curved diagonal farm track"},
+      {"id":"road_west","description":"western north-south farm track"},
+      {"id":"road_east","description":"eastern north-south farm track"}
+    ]
+  },
+  "planned_gameplay_markers": [],
+  "enemy_units": [],
+  "map_labels": []
+}

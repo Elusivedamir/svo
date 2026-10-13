@@ -73,9 +73,10 @@ func _ready() -> void:
     menu_heading = _label(menu_view, "ГЛАВНОЕ МЕНЮ", 39, Color("#eceadd"))
     menu_hint = _label(menu_view, "ПОЛЕВАЯ КОМАНДНАЯ СИСТЕМА", 20, Color("#c7c8b8"))
 
-    var new_game := _button(menu_view, "НОВАЯ ИГРА", true)
-    new_game.tooltip_text = "Станет доступно после создания карты"
+    var new_game := _button(menu_view, "НОВАЯ ИГРА", false)
+    new_game.tooltip_text = "Открыть карту полей и лесополос"
     menu_buttons.append(new_game)
+    new_game.pressed.connect(_start_new_game)
     var cont := _button(menu_view, "ПРОДОЛЖИТЬ", true)
     cont.tooltip_text = "Пока нет сохранённой кампании"
     menu_buttons.append(cont)
@@ -85,7 +86,7 @@ func _ready() -> void:
     var exit_btn := _button(menu_view, "ВЫХОД", false)
     exit_btn.pressed.connect(_exit_game)
     menu_buttons.append(exit_btn)
-    version_label = _label(menu_view, "v0.2.3  •  МЕНЮ", 18, Color("#9da9a5"))
+    version_label = _label(menu_view, "v0.3.0  •  МЕНЮ", 18, Color("#9da9a5"))
 
     settings_view = Control.new()
     settings_view.visible = false
@@ -144,6 +145,7 @@ func _ready() -> void:
     resized.connect(_layout)
     _layout()
     print("SMOKE_MAIN_MENU_READY")
+    print("SMOKE_NEW_GAME_BUTTON_ACTIVE")
 
 func _label(parent: Control, caption: String, pts: int, tint: Color) -> Label:
     var result := Label.new()
@@ -340,3 +342,8 @@ func _unhandled_input(event: InputEvent) -> void:
     if settings_view.visible and event.is_action_pressed("ui_cancel"):
         _close_settings()
         get_viewport().set_input_as_handled()
+
+func _start_new_game() -> void:
+    var result := get_tree().change_scene_to_file("res://scenes/world_map.tscn")
+    if result != OK:
+        push_error("Could not open the map scene: %d" % result)
