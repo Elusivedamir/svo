@@ -1,10 +1,10 @@
 extends Node2D
 
-# v0.3.3: unique continuous 12800x7200 landscape with independently authored walkability.
+# v0.3.4: unique continuous 12800x7200 landscape with independently authored walkability.
 # Preserve controls, camera and ball movement from the last successful build.
 # No game combat logic, structures, or HUD. Tap a point to pathfind, swipe to pan.
-const MAP_TEXTURE: Texture2D = preload("res://assets/map/terrain_v0.3.3.png")
-const NAV_TEXTURE: Texture2D = preload("res://assets/map/navigation_v0.3.3.png")
+const MAP_TEXTURE: Texture2D = preload("res://assets/map/terrain_v0.3.4.png")
+const NAV_TEXTURE: Texture2D = preload("res://assets/map/navigation_v0.3.4.png")
 const MENU_SCENE := "res://scenes/main_menu.tscn"
 const WORLD_SIZE := Vector2(12800.0, 7200.0)
 const SECTOR_SIZE := Vector2(6400.0, 3600.0)
@@ -42,7 +42,7 @@ func _ready() -> void:
         return
     nav_size = Vector2i(img.get_width(), img.get_height())
     if nav_size != EXPECTED_NAV_SIZE or Vector2i(MAP_TEXTURE.get_size()) != EXPECTED_TEXTURE_SIZE:
-        push_error("Map and navigation sizes do not match v0.3.3 unique world")
+        push_error("Map and navigation sizes do not match v0.3.4 water-safe unique world")
         return
     nav_cell = WORLD_SIZE / Vector2(nav_size)
     nav = AStarGrid2D.new()
@@ -109,12 +109,12 @@ func _ready() -> void:
     queue_redraw()
     print("SMOKE_MAP_READY")
     print("SMOKE_NAV_READY field/road/woods/houses/water/bridge: ", nav_size, "/", road, "/", wood, "/", buildings, "/", water, "/", bridges)
-    if nav.is_point_solid(Vector2i(132, 82)) and nav.is_point_solid(Vector2i(82, 82)):
+    if nav.is_point_solid(Vector2i(84, 93)) and nav.is_point_solid(Vector2i(350, 125)):
         print("SMOKE_NAV_OBSTACLES_BLOCKED")
     else:
         push_error("Navigation solid test failed")
     # Test the mapped bridge and obstacle independently from raster dimensions.
-    if not nav.is_point_solid(Vector2i(56, 74)) and int(nav_types[74 * nav_size.x + 56]) == CELL_BRIDGE:
+    if not nav.is_point_solid(Vector2i(60, 76)) and int(nav_types[76 * nav_size.x + 60]) == CELL_BRIDGE:
         print("SMOKE_NAV_BRIDGE_OPEN")
     else:
         push_error("Bridge mask missing or blocked")
@@ -127,6 +127,16 @@ func _ready() -> void:
         print("SMOKE_NAV_FOUR_SECTORS")
     else:
         push_error("Expanded world size failed")
+    # v0.3.4: explicit water / bridge tests against artwork-aligned river cells.
+    var nw_river: Vector2i = Vector2i(85, 95)
+    var eastern_river: Vector2i = Vector2i(348, 125)
+    var western_bridge: Vector2i = Vector2i(60, 76)
+    if (nav.is_point_solid(nw_river) and nav.is_point_solid(eastern_river)
+        and not nav.is_point_solid(western_bridge)
+        and int(nav_types[western_bridge.y * nav_size.x + western_bridge.x]) == CELL_BRIDGE):
+        print("SMOKE_NAV_WATER_BARRIER_FIXED")
+    else:
+        push_error("Water barrier mismatch or bridge closed")
     # Check actual traversability across the NEW seams, not merely within the old sector.
     var east: Vector2i = Vector2i(310, 56)
     var south: Vector2i = Vector2i(100, 178)
@@ -198,6 +208,12 @@ func _request_move(screen_point: Vector2) -> void:
     if result.is_empty():
         _reject(world)
         return
+    # Defence in depth: a route must never contain a water or building cell.
+    for waypoint in result:
+        var waypoint_cell: Vector2i = _cell_from_world(waypoint)
+        if not _inside(waypoint_cell) or nav.is_point_solid(waypoint_cell):
+            _reject(world)
+            return
     path = result
     path_next = 1 if path.size() > 1 else 0
     blocked_timer = 0.0
