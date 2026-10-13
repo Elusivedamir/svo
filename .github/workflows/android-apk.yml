@@ -78,7 +78,7 @@ jobs:
           python3 - <<'PYMAP'
           import struct
           from pathlib import Path
-          expect={"assets/map/terrain_v0.3.4.png":(3344,1882),"assets/map/navigation_v0.3.5.png":(418,236)}
+          expect={"assets/map/terrain_v0.3.4.png":(3344,1882),"assets/map/navigation_v0.3.6.png":(418,236)}
           for file,size in expect.items():
               b=Path(file).read_bytes()[:24]
               assert b[:8]==b"\x89PNG\r\n\x1a\n",file
@@ -97,7 +97,7 @@ jobs:
             echo "ERROR: Godot process failed during startup: $smoke_exit"
             exit 1
           fi
-          if grep -E 'SCRIPT ERROR:|Parse Error:|Invalid call\.|Failed to load script' "$RUNNER_TEMP/smoke.log"; then
+          if grep -E 'SCRIPT ERROR:|Parse Error:|Invalid call\.|Failed to load script|SHADER ERROR:' "$RUNNER_TEMP/smoke.log"; then
             echo "ERROR: Godot runtime/script error detected"
             exit 1
           fi
@@ -125,7 +125,7 @@ jobs:
             echo "ERROR: Map failed during startup ($map_exit)"
             exit 1
           fi
-          if grep -E 'SCRIPT ERROR:|Parse Error:|Invalid call\.|Failed to load script' "$RUNNER_TEMP/map_smoke.log"; then
+          if grep -E 'SCRIPT ERROR:|Parse Error:|Invalid call\.|Failed to load script|SHADER ERROR:' "$RUNNER_TEMP/map_smoke.log"; then
             echo "ERROR: Map script error detected"
             exit 1
           fi
@@ -143,25 +143,25 @@ jobs:
           echo "PASS: map scene started and terrain loaded"
           # Regressions use the actual map input and movement code, not only fixed smoke cells.
           set +e
-          "$GODOT" --headless --audio-driver Dummy --path . --script res://tools/test_navigation_v035.gd > "$RUNNER_TEMP/navigation_v035.log" 2>&1
+          timeout 60s "$GODOT" --headless --audio-driver Dummy --path . --script res://tools/test_navigation_v036.gd > "$RUNNER_TEMP/navigation_v036.log" 2>&1
           nav_exit=$?
           set -e
-          cat "$RUNNER_TEMP/navigation_v035.log"
+          cat "$RUNNER_TEMP/navigation_v036.log"
           if [[ "$nav_exit" != 0 ]]; then
-            echo "ERROR: v0.3.5 navigation regression script exited with $nav_exit"
+            echo "ERROR: v0.3.6 navigation regression script exited with $nav_exit"
             exit 1
           fi
-          if grep -E 'SCRIPT ERROR:|Parse Error:|Invalid call\.|Failed to load script' "$RUNNER_TEMP/navigation_v035.log"; then
-            echo "ERROR: v0.3.5 navigation regression script failed"
+          if grep -E 'SCRIPT ERROR:|Parse Error:|Invalid call\.|Failed to load script|SHADER ERROR:' "$RUNNER_TEMP/navigation_v036.log"; then
+            echo "ERROR: v0.3.6 navigation regression script failed"
             exit 1
           fi
-          grep -Fq 'PASS_NAVIGATION_V035' "$RUNNER_TEMP/navigation_v035.log"
-          "$GODOT" --headless --path . --export-debug "Android" build/SVO-v0.3.5-debug.apk
-          test -s build/SVO-v0.3.5-debug.apk
+          grep -Fq 'PASS_NAVIGATION_V036' "$RUNNER_TEMP/navigation_v036.log"
+          "$GODOT" --headless --path . --export-debug "Android" build/SVO-v0.3.6-debug.apk
+          test -s build/SVO-v0.3.6-debug.apk
 
       - name: Upload installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: SVO-v0.3.5-debug
-          path: build/SVO-v0.3.5-debug.apk
+          name: SVO-v0.3.6-debug
+          path: build/SVO-v0.3.6-debug.apk
           if-no-files-found: error

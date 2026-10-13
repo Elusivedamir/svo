@@ -1,10 +1,11 @@
 extends Node2D
 
-# v0.3.5: unique continuous 12800x7200 landscape with independently authored walkability.
+# v0.3.6: unique continuous 12800x7200 landscape with independently authored walkability.
 # Preserve controls, camera and ball movement from the last successful build.
 # No game combat logic, structures, or HUD. Tap a point to pathfind, swipe to pan.
 const MAP_TEXTURE: Texture2D = preload("res://assets/map/terrain_v0.3.4.png")
-const NAV_TEXTURE: Texture2D = preload("res://assets/map/navigation_v0.3.5.png")
+const NAV_TEXTURE: Texture2D = preload("res://assets/map/navigation_v0.3.6.png")
+const TERRAIN_CLARITY: Shader = preload("res://shaders/terrain_clarity.gdshader")
 const MENU_SCENE := "res://scenes/main_menu.tscn"
 const WORLD_SIZE := Vector2(12800.0, 7200.0)
 const SECTOR_SIZE := Vector2(6400.0, 3600.0)
@@ -42,7 +43,7 @@ func _ready() -> void:
         return
     nav_size = Vector2i(img.get_width(), img.get_height())
     if nav_size != EXPECTED_NAV_SIZE or Vector2i(MAP_TEXTURE.get_size()) != EXPECTED_TEXTURE_SIZE:
-        push_error("Map and navigation sizes do not match v0.3.5 water-safe unique world")
+        push_error("Map and navigation sizes do not match v0.3.6 water-safe unique world")
         return
     nav_cell = WORLD_SIZE / Vector2(nav_size)
     nav = AStarGrid2D.new()
@@ -89,7 +90,10 @@ func _ready() -> void:
     terrain.centered = false
     terrain.z_index = -5
     terrain.scale = WORLD_SIZE / Vector2(MAP_TEXTURE.get_size())
-    terrain.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
+    terrain.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+    var clarity_material := ShaderMaterial.new()
+    clarity_material.shader = TERRAIN_CLARITY
+    terrain.material = clarity_material
     add_child(terrain)
 
     camera = Camera2D.new()

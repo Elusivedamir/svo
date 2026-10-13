@@ -1,0 +1,71 @@
+{
+  "id": "field_sector_unique",
+  "version": "0.3.6-northwest-clarity",
+  "fictional": true,
+  "world_size": [
+    12800,
+    7200
+  ],
+  "art_size": [
+    3344,
+    1882
+  ],
+  "navigation_cells": [
+    418,
+    236
+  ],
+  "projection": "approved painted oblique approximately 70-degree bird-eye; navigation is screen-aligned 2D approximations",
+  "background": "res://assets/map/terrain_v0.3.4.png",
+  "navigation_mask": "res://assets/map/navigation_v0.3.6.png",
+  "legend_rgb": {
+    "field": [
+      200,
+      200,
+      200
+    ],
+    "road": [
+      255,
+      0,
+      0
+    ],
+    "woods": [
+      0,
+      255,
+      0
+    ],
+    "building": [
+      0,
+      0,
+      0
+    ],
+    "water": [
+      0,
+      0,
+      255
+    ],
+    "bridge": [
+      255,
+      255,
+      0
+    ]
+  },
+  "blocked": [
+    "building",
+    "water"
+  ],
+  "walkable": [
+    "field",
+    "road",
+    "woods",
+    "bridge"
+  ],
+  "route_weights": {
+    "road": 1.0,
+    "field": 1.6,
+    "woods": 2.7,
+    "bridge": 1.1
+  },
+  "limitations": "Original painted terrain unchanged. Local dry road clearance reconnects northwest land without opening core water; bridges unchanged. Mild terrain-only clarity shader and mipmap filtering. Small shore details and real Android performance still need device checks.",
+  "water_geometry": "res://data/water_regions_v0.3.6.json",
+  "graphics_shader": "res://shaders/terrain_clarity.gdshader"
+}
