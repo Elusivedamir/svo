@@ -122,13 +122,20 @@ jobs:
             echo "ERROR: Map scene did not initialize"
             exit 1
           fi
+          for marker in SMOKE_NAV_READY SMOKE_NAV_OBSTACLES_BLOCKED SMOKE_NAV_ROUTE_FOUND; do
+            if ! grep -Fq "$marker" "$RUNNER_TEMP/map_smoke.log"; then
+              echo "ERROR: navigation check missing: $marker"
+              exit 1
+            fi
+          done
+          echo "PASS: real map navigation and obstacles verified"
           echo "PASS: map scene started and terrain loaded"
-          "$GODOT" --headless --path . --export-debug "Android" build/SVO-v0.3-debug.apk
-          test -s build/SVO-v0.3-debug.apk
+          "$GODOT" --headless --path . --export-debug "Android" build/SVO-v0.3.1-debug.apk
+          test -s build/SVO-v0.3.1-debug.apk
 
       - name: Upload installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: SVO-v0.3-debug
-          path: build/SVO-v0.3-debug.apk
+          name: SVO-v0.3.1-debug
+          path: build/SVO-v0.3.1-debug.apk
           if-no-files-found: error

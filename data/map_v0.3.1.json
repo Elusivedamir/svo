@@ -1,0 +1,26 @@
+{
+  "id": "field_sector_alpha",
+  "version": "0.3.1-test-navigation",
+  "setting": "fictional rural landscape",
+  "camera": "baked angled 2.5D map illustration; actual world navigation is 2D",
+  "world_size": [6400, 3600],
+  "art_size": [1672, 941],
+  "navigation_cells": [209, 118],
+  "nav_mask": "res://assets/map/navigation_v0.3.1.png",
+  "mask_colors": {
+    "field": [200,200,200],
+    "road": [255,0,0],
+    "forest_belt": [0,255,0],
+    "building_blocked": [0,0,0],
+    "water_blocked": [0,0,255],
+    "bridge": [255,255,0]
+  },
+  "movement_costs": {
+    "road": 1.0,
+    "field": 1.6,
+    "forest_belt": 2.7,
+    "bridge": 1.1
+  },
+  "solid_classes": ["building_blocked", "water_blocked"],
+  "prototype_note": "Terrain masks are annotated by hand on the approved illustration, not collision meshes. Navigation geometry is approximate until a true 3D world is built."
+}
