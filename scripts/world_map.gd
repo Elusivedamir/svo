@@ -40,7 +40,7 @@ func _ready() -> void:
         push_error("Navigation grid not imported")
         return
     nav_size = Vector2i(img.get_width(), img.get_height())
-    if nav_size != EXPECTED_NAV_SIZE or MAP_TEXTURE.get_size() != EXPECTED_TEXTURE_SIZE:
+    if nav_size != EXPECTED_NAV_SIZE or Vector2i(MAP_TEXTURE.get_size()) != EXPECTED_TEXTURE_SIZE:
         push_error("Map and navigation sizes do not match v0.3.2 fourfold expansion")
         return
     nav_cell = WORLD_SIZE / Vector2(nav_size)
