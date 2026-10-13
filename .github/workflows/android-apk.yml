@@ -139,6 +139,11 @@ jobs:
               exit 1
             fi
           done
+          if ! grep -Fq 'SMOKE_BATTLE_READY' "$RUNNER_TEMP/map_smoke.log"; then
+            echo "ERROR: preparation, battle model, fog and UI did not initialize"
+            exit 1
+          fi
+          echo "PASS: actual battle scene initialized"
           echo "PASS: real map navigation and obstacles verified"
           echo "PASS: map scene started and terrain loaded"
           # Regressions use the actual map input and movement code, not only fixed smoke cells.
@@ -201,12 +206,31 @@ jobs:
             exit 1
           fi
           grep -Fq 'PASS_BRIDGE_V051' "$RUNNER_TEMP/bridge_v051.log"
-          "$GODOT" --headless --path . --export-debug "Android" build/SVO-v0.5.1-debug.apk
-          test -s build/SVO-v0.5.1-debug.apk
+          # Model, fog, actual drawing, and integrated touch/UI must all pass.
+          for test in model visibility view battle; do
+            marker="PASS_${test^^}_V06"
+            log="$RUNNER_TEMP/${test}_v06.log"
+            set +e
+            timeout 120s "$GODOT" --headless --audio-driver Dummy --path . --script "res://tools/test_${test}_v06.gd" > "$log" 2>&1
+            battle_test_exit=$?
+            set -e
+            cat "$log"
+            if [[ "$battle_test_exit" != 0 ]]; then
+              echo "ERROR: v0.6 $test test exited with $battle_test_exit"
+              exit 1
+            fi
+            if grep -E 'SCRIPT ERROR:|Parse Error:|Invalid call\.|Failed to load script|SHADER ERROR:' "$log"; then
+              echo "ERROR: v0.6 $test test raised a runtime error"
+              exit 1
+            fi
+            grep -Fq "$marker" "$log"
+          done
+          "$GODOT" --headless --path . --export-debug "Android" build/SVO-v0.6-debug.apk
+          test -s build/SVO-v0.6-debug.apk
 
       - name: Upload installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: SVO-v0.5.1-debug
-          path: build/SVO-v0.5.1-debug.apk
+          name: SVO-v0.6-debug
+          path: build/SVO-v0.6-debug.apk
           if-no-files-found: error

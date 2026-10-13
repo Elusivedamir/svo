@@ -32,6 +32,7 @@ func region_grid(rect: Rect2i) -> AStarGrid2D:
 
 func run_checks() -> void:
     world = load("res://scenes/world_map.tscn").instantiate()
+    world.legacy_regression_mode = true
     root.add_child(world)
     world.set_process(false)
     await process_frame

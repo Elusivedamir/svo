@@ -1,656 +1,475 @@
-extends Node2D
+extends "res://scripts/navigation_map_v051.gd"
 
-# v0.5.1: first selectable infantry squad and the reviewed junction bridge.
-# ball_pos remains the navigation anchor for the existing regression tools.
-const MAP_TEXTURE: Texture2D = preload("res://assets/map/terrain_v0.3.4.png")
-const NAV_TEXTURE: Texture2D = preload("res://assets/map/navigation_v0.5.1.png")
-const TERRAIN_CLARITY: Shader = preload("res://shaders/terrain_clarity.gdshader")
-const MENU_SCENE := "res://scenes/main_menu.tscn"
-const WORLD_SIZE := Vector2(12800.0, 7200.0)
-const SECTOR_SIZE := Vector2(6400.0, 3600.0)
-const EXPECTED_NAV_SIZE := Vector2i(418, 236)
-const EXPECTED_TEXTURE_SIZE := Vector2i(3344, 1882)
-const CELL_FIELD := 0
-const CELL_ROAD := 1
-const CELL_WOODS := 2
-const CELL_HOUSE := 3
-const CELL_WATER := 4
-const CELL_BRIDGE := 5
-const TAP_SLOP := 20.0
-const MIN_PINCH_DISTANCE := 8.0
-
-var terrain: Sprite2D
-var camera: Camera2D
-var nav: AStarGrid2D
-var nav_types: PackedByteArray = PackedByteArray()
-var nav_size: Vector2i
-var nav_cell: Vector2
-var ball_pos: Vector2
-var path: PackedVector2Array = PackedVector2Array()
-var path_next: int = 0
-var blocked_at: Vector2 = Vector2.ZERO
-var blocked_timer := 0.0
-var returning := false
-var camera_min_zoom := 0.25
-var camera_max_zoom := 1.0
-var camera_view_initialized := false
-var camera_controls: CanvasLayer
-var focus_button: Button
-var squad_panel: PanelContainer
-var squad_status: Label
-var selection_button: Button
-var stop_button: Button
-var squad_selected := true
-var squad_notice := ""
-var squad_notice_timer := 0.0
-const SQUAD_MARKER_SIZE := Vector2(104.0, 84.0)
-const SQUAD_TOUCH_PADDING := 22.0
-var touch_points: Dictionary = {}
-var ui_touch_ids: Dictionary = {}
-var gesture_was_multi := false
-var single_touch_index := -1
-var pinch_ids := Vector2i(-1, -1)
-var pinch_distance := 0.0
-var pinch_center := Vector2.ZERO
-var touch_down := false
-var touch_start := Vector2.ZERO
-var touch_last := Vector2.ZERO
-var touch_moved := false
-
-func _ready() -> void:
-    var img: Image = NAV_TEXTURE.get_image()
-    if img == null or img.get_width() < 20 or img.get_height() < 20:
-        push_error("Navigation grid not imported")
-        return
-    nav_size = Vector2i(img.get_width(), img.get_height())
-    if nav_size != EXPECTED_NAV_SIZE or Vector2i(MAP_TEXTURE.get_size()) != EXPECTED_TEXTURE_SIZE:
-        push_error("Map and navigation sizes do not match v0.3.6 water-safe unique world")
-        return
-    nav_cell = WORLD_SIZE / Vector2(nav_size)
-    nav = AStarGrid2D.new()
-    nav.region = Rect2i(Vector2i.ZERO, nav_size)
-    nav.cell_size = nav_cell
-    nav.offset = nav_cell * 0.5
-    nav.default_compute_heuristic = AStarGrid2D.HEURISTIC_OCTILE
-    nav.default_estimate_heuristic = AStarGrid2D.HEURISTIC_OCTILE
-    nav.diagonal_mode = AStarGrid2D.DIAGONAL_MODE_ONLY_IF_NO_OBSTACLES
-    nav.update()
-    nav_types.resize(nav_size.x * nav_size.y)
-    var buildings := 0
-    var water := 0
-    var road := 0
-    var wood := 0
-    var bridges := 0
-    for y in range(nav_size.y):
-        for x in range(nav_size.x):
-            var p: Color = img.get_pixel(x, y)
-            var terrain_type: int = _classify_color(p)
-            nav_types[y * nav_size.x + x] = terrain_type
-            var id := Vector2i(x, y)
-            match terrain_type:
-                CELL_HOUSE:
-                    nav.set_point_solid(id, true)
-                    buildings += 1
-                CELL_WATER:
-                    nav.set_point_solid(id, true)
-                    water += 1
-                CELL_ROAD:
-                    nav.set_point_weight_scale(id, 1.0)
-                    road += 1
-                CELL_WOODS:
-                    nav.set_point_weight_scale(id, 2.7)
-                    wood += 1
-                CELL_BRIDGE:
-                    nav.set_point_weight_scale(id, 1.1)
-                    bridges += 1
-                _:
-                    nav.set_point_weight_scale(id, 1.6)
-
-    terrain = Sprite2D.new()
-    terrain.texture = MAP_TEXTURE
-    terrain.centered = false
-    terrain.z_index = -5
-    terrain.scale = WORLD_SIZE / Vector2(MAP_TEXTURE.get_size())
-    terrain.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
-    var clarity_material := ShaderMaterial.new()
-    clarity_material.shader = TERRAIN_CLARITY
-    terrain.material = clarity_material
-    add_child(terrain)
-
-    camera = Camera2D.new()
-    camera.enabled = true
-    # Open in the original home sector, rather than zooming out and shrinking every building.
-    camera.position = SECTOR_SIZE * 0.5
-    camera.position_smoothing_enabled = false
-    add_child(camera)
-    get_viewport().size_changed.connect(_resize_camera)
-    _resize_camera()
-
-    var spawn := Vector2i(100, 56)
-    if nav.is_point_solid(spawn):
-        push_error("Infantry squad spawn is blocked")
-        return
-    ball_pos = nav.get_point_position(spawn)
-    _create_camera_controls()
-    print("SMOKE_SQUAD_READY")
-    queue_redraw()
-    print("SMOKE_MAP_READY")
-    print("SMOKE_NAV_READY field/road/woods/houses/water/bridge: ", nav_size, "/", road, "/", wood, "/", buildings, "/", water, "/", bridges)
-    if nav.is_point_solid(Vector2i(84, 93)) and nav.is_point_solid(Vector2i(350, 125)):
-        print("SMOKE_NAV_OBSTACLES_BLOCKED")
-    else:
-        push_error("Navigation solid test failed")
-    # Test the mapped bridge and obstacle independently from raster dimensions.
-    if not nav.is_point_solid(Vector2i(60, 76)) and int(nav_types[76 * nav_size.x + 60]) == CELL_BRIDGE:
-        print("SMOKE_NAV_BRIDGE_OPEN")
-    else:
-        push_error("Bridge mask missing or blocked")
-    var trial: PackedVector2Array = nav.get_point_path(spawn, Vector2i(185, 61))
-    if trial.size() > 10:
-        print("SMOKE_NAV_ROUTE_FOUND")
-    else:
-        push_error("Navigation path test failed")
-    if nav_size == EXPECTED_NAV_SIZE and WORLD_SIZE == Vector2(12800.0, 7200.0):
-        print("SMOKE_NAV_FOUR_SECTORS")
-    else:
-        push_error("Expanded world size failed")
-    # v0.3.4: explicit water / bridge tests against artwork-aligned river cells.
-    var nw_river: Vector2i = Vector2i(85, 95)
-    var eastern_river: Vector2i = Vector2i(348, 125)
-    var western_bridge: Vector2i = Vector2i(60, 76)
-    if (nav.is_point_solid(nw_river) and nav.is_point_solid(eastern_river)
-        and not nav.is_point_solid(western_bridge)
-        and int(nav_types[western_bridge.y * nav_size.x + western_bridge.x]) == CELL_BRIDGE):
-        print("SMOKE_NAV_WATER_BARRIER_FIXED")
-    else:
-        push_error("Water barrier mismatch or bridge closed")
-    # Check actual traversability across the NEW seams, not merely within the old sector.
-    var east: Vector2i = Vector2i(310, 56)
-    var south: Vector2i = Vector2i(100, 178)
-    if (
-        not nav.is_point_solid(east)
-        and not nav.is_point_solid(south)
-        and nav.get_point_path(spawn, east).size() > 30
-        and nav.get_point_path(spawn, south).size() > 30
-    ):
-        print("SMOKE_NAV_CROSS_SECTOR_ROUTES")
-        print("SMOKE_NAV_UNIQUE_WORLD")
-    else:
-        push_error("Expanded sectors are not connected by walkable routes")
-
-func _classify_color(p: Color) -> int:
-    # Colors in authored grid are RGB primaries; no interpolation is used here.
-    if p.r < 0.18 and p.g < 0.18 and p.b < 0.18:
-        return CELL_HOUSE
-    if p.b > 0.72 and p.r < 0.20:
-        return CELL_WATER
-    if p.r > 0.72 and p.g > 0.72 and p.b < 0.25:
-        return CELL_BRIDGE
-    if p.r > 0.72 and p.g < 0.25 and p.b < 0.25:
-        return CELL_ROAD
-    if p.g > 0.72 and p.r < 0.25 and p.b < 0.25:
-        return CELL_WOODS
-    return CELL_FIELD
-
-func _resize_camera() -> void:
-    if not is_instance_valid(camera):
-        return
-    var viewport: Vector2 = get_viewport_rect().size
-    _cancel_touch_gesture()
-    ui_touch_ids.clear()
-    var previous_min: float = camera_min_zoom
-    var previous_zoom: float = camera.zoom.x
-    # Preserve the original zoom limits and scale relative to a resized viewport.
-    camera_min_zoom = maxf(viewport.x / WORLD_SIZE.x, viewport.y / WORLD_SIZE.y)
-    var sector_zoom: float = maxf(viewport.x / SECTOR_SIZE.x, viewport.y / SECTOR_SIZE.y)
-    camera_max_zoom = maxf(camera_min_zoom * 3.0, sector_zoom * 3.0)
-    var new_zoom: float = maxf(sector_zoom, camera_min_zoom)
-    if camera_view_initialized and previous_min > 0.0:
-        new_zoom = previous_zoom * camera_min_zoom / previous_min
-    camera.zoom = Vector2.ONE * clampf(new_zoom, camera_min_zoom, camera_max_zoom)
-    camera_view_initialized = true
-    _clamp_camera()
-    _layout_camera_controls()
+# The old navigation and gesture component remains independently testable.
+# Normal play uses the full battle model below; no legacy marker is drawn.
+const MODEL_SCRIPT = preload("res://scripts/battle_model.gd")
+const VISIBILITY_SCRIPT = preload("res://scripts/battle_visibility.gd")
+const VIEW_SCRIPT = preload("res://scripts/battle_view.gd")
+var legacy_regression_mode := false
+var model
+var view
+var battle_config: Dictionary = {}
+var selected_unit := 0
+var selected_drone := false
+var selected_post := false
+var command_mode := "move"
+var hud_panel: PanelContainer
+var territory_panel: PanelContainer
+var conditions_panel: PanelContainer
+var territory_label: Label
+var phase_label: Label
+var status_label: Label
+var selection_label: Label
+var start_button: Button
+var pause_button: Button
+var weather_option: OptionButton
+var time_option: OptionButton
+var unit_buttons: Array[Button] = []
+var drone_button: Button
+var post_button: Button
+var mode_buttons: Dictionary = {}
+var _hud_timer := 0.0
+var _battle_message := ""
+var _message_timer := 0.0
+const WEATHER_KEYS := ["clear", "rain", "fog"]
+const TIME_KEYS := ["day", "dusk", "night"]
 
 func _create_camera_controls() -> void:
+    if legacy_regression_mode:
+        super._create_camera_controls()
+        return
+    var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string("res://data/battle_v06.json"))
+    if not parsed is Dictionary:
+        push_error("Battle configuration could not be loaded")
+        return
+    battle_config = parsed
+    var visibility = VISIBILITY_SCRIPT.new()
+    visibility.setup(nav, nav_types, WORLD_SIZE, battle_config)
+    model = MODEL_SCRIPT.new()
+    model.setup(nav, nav_types, WORLD_SIZE, visibility, battle_config)
+    view = VIEW_SCRIPT.new()
+    add_child(view)
+    view.setup(model, camera)
+    _build_battle_hud()
+    _select_unit(0)
+    print("SMOKE_BATTLE_READY")
+
+func _panel(name_text: String) -> PanelContainer:
+    var panel := PanelContainer.new()
+    panel.name = name_text
+    panel.mouse_filter = Control.MOUSE_FILTER_STOP
+    var style := StyleBoxFlat.new()
+    style.bg_color = Color(0.025, 0.055, 0.06, 0.95)
+    style.border_color = Color(0.34, 0.56, 0.48, 0.85)
+    style.set_border_width_all(2)
+    style.set_corner_radius_all(12)
+    style.content_margin_left = 16.0
+    style.content_margin_right = 16.0
+    style.content_margin_top = 12.0
+    style.content_margin_bottom = 12.0
+    panel.add_theme_stylebox_override("panel", style)
+    camera_controls.add_child(panel)
+    return panel
+
+func _label(text_value: String, font_size: int = 26) -> Label:
+    var label := Label.new()
+    label.text = text_value
+    label.add_theme_font_size_override("font_size", font_size)
+    label.add_theme_color_override("font_color", Color("#e4f4eb"))
+    label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    return label
+
+func _button(text_value: String, node_name: String, callback: Callable, minimum: Vector2 = Vector2(150, 64)) -> Button:
+    var button := Button.new()
+    button.text = text_value
+    button.name = node_name
+    button.custom_minimum_size = minimum
+    button.focus_mode = Control.FOCUS_NONE
+    button.mouse_filter = Control.MOUSE_FILTER_STOP
+    button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    button.add_theme_font_size_override("font_size", 24)
+    button.add_theme_color_override("font_color", Color("#ecf8ee"))
+    var style := StyleBoxFlat.new()
+    style.bg_color = Color(0.04, 0.11, 0.10, 0.97)
+    style.border_color = Color(0.36, 0.63, 0.51)
+    style.set_border_width_all(2)
+    style.set_corner_radius_all(10)
+    button.add_theme_stylebox_override("normal", style)
+    button.add_theme_stylebox_override("hover", style.duplicate())
+    var pressed := style.duplicate() as StyleBoxFlat
+    pressed.bg_color = Color(0.14, 0.30, 0.21)
+    button.add_theme_stylebox_override("pressed", pressed)
+    button.pressed.connect(callback)
+    return button
+
+func _build_battle_hud() -> void:
     camera_controls = CanvasLayer.new()
-    camera_controls.name = "CameraControls"
+    camera_controls.name = "BattleControls"
     camera_controls.layer = 20
     add_child(camera_controls)
-    focus_button = Button.new()
-    focus_button.name = "FocusMarker"
-    focus_button.text = "К ОТРЯДУ"
-    focus_button.tooltip_text = "Вернуть камеру к отряду"
-    focus_button.focus_mode = Control.FOCUS_NONE
-    focus_button.mouse_filter = Control.MOUSE_FILTER_STOP
-    focus_button.add_theme_font_size_override("font_size", 28)
-    focus_button.add_theme_color_override("font_color", Color("#ecf5eb"))
-    var normal := StyleBoxFlat.new()
-    normal.bg_color = Color(0.035, 0.07, 0.075, 0.94)
-    normal.border_color = Color(0.40, 0.62, 0.54, 0.85)
-    normal.set_border_width_all(2)
-    normal.set_corner_radius_all(14)
-    focus_button.add_theme_stylebox_override("normal", normal)
-    var pressed := normal.duplicate() as StyleBoxFlat
-    pressed.bg_color = Color(0.13, 0.25, 0.22, 0.97)
-    focus_button.add_theme_stylebox_override("pressed", pressed)
-    focus_button.add_theme_stylebox_override("hover", normal.duplicate())
+    territory_panel = _panel("Territory")
+    var territory_box := VBoxContainer.new()
+    territory_panel.add_child(territory_box)
+    territory_label = _label("НАШИ 50%   |   ПРОТИВНИК 50%", 28)
+    territory_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+    territory_box.add_child(territory_label)
+    phase_label = _label("ПОДГОТОВКА · БЕЗ ТАЙМЕРА", 24)
+    phase_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+    territory_box.add_child(phase_label)
+
+    conditions_panel = _panel("Conditions")
+    var condition_box := VBoxContainer.new()
+    condition_box.add_theme_constant_override("separation", 8)
+    conditions_panel.add_child(condition_box)
+    condition_box.add_child(_label("УСЛОВИЯ БОЯ", 24))
+    var choices := HBoxContainer.new()
+    choices.add_theme_constant_override("separation", 12)
+    condition_box.add_child(choices)
+    weather_option = OptionButton.new()
+    weather_option.name = "Weather"
+    time_option = OptionButton.new()
+    time_option.name = "TimeOfDay"
+    for option: OptionButton in [weather_option, time_option]:
+        option.custom_minimum_size = Vector2(220, 64)
+        option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+        option.focus_mode = Control.FOCUS_NONE
+        option.add_theme_font_size_override("font_size", 26)
+        choices.add_child(option)
+    for text_value: String in ["Ясно", "Дождь", "Туман"]:
+        weather_option.add_item(text_value)
+    for text_value: String in ["День", "Сумерки", "Ночь"]:
+        time_option.add_item(text_value)
+    weather_option.item_selected.connect(_set_weather)
+    time_option.item_selected.connect(_set_time)
+
+    focus_button = _button("К ОТРЯДУ", "FocusMarker", _focus_marker, Vector2(320, 88))
     camera_controls.add_child(focus_button)
-    focus_button.pressed.connect(_focus_marker)
-    squad_panel = PanelContainer.new()
-    squad_panel.name = "SquadPanel"
-    squad_panel.mouse_filter = Control.MOUSE_FILTER_STOP
-    var panel_style := normal.duplicate() as StyleBoxFlat
-    panel_style.content_margin_left = 20.0
-    panel_style.content_margin_right = 20.0
-    panel_style.content_margin_top = 16.0
-    panel_style.content_margin_bottom = 16.0
-    squad_panel.add_theme_stylebox_override("panel", panel_style)
-    camera_controls.add_child(squad_panel)
+    start_button = _button("НАЧАТЬ БОЙ", "StartBattle", _start_battle, Vector2(360, 88))
+    camera_controls.add_child(start_button)
+    pause_button = _button("ПАУЗА", "PauseBattle", _toggle_pause, Vector2(360, 88))
+    camera_controls.add_child(pause_button)
+
+    hud_panel = _panel("BattlePanel")
     var content := VBoxContainer.new()
-    content.add_theme_constant_override("separation", 12)
-    squad_panel.add_child(content)
-    var title := Label.new()
-    title.text = "ПЕХОТА 1"
-    title.add_theme_font_size_override("font_size", 30)
-    title.add_theme_color_override("font_color", Color("#c2ffe4"))
-    content.add_child(title)
-    squad_status = Label.new()
-    squad_status.add_theme_font_size_override("font_size", 26)
-    squad_status.add_theme_color_override("font_color", Color("#ecf5eb"))
-    content.add_child(squad_status)
-    var actions := HBoxContainer.new()
-    actions.add_theme_constant_override("separation", 14)
-    content.add_child(actions)
-    selection_button = Button.new()
-    selection_button.name = "SelectSquad"
-    selection_button.custom_minimum_size = Vector2(300.0, 82.0)
-    selection_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    stop_button = Button.new()
-    stop_button.name = "StopSquad"
-    stop_button.text = "СТОП"
-    stop_button.custom_minimum_size = Vector2(130.0, 82.0)
-    for button: Button in [selection_button, stop_button]:
-        button.focus_mode = Control.FOCUS_NONE
-        button.mouse_filter = Control.MOUSE_FILTER_STOP
-        button.add_theme_font_size_override("font_size", 26)
-        button.add_theme_color_override("font_color", Color("#ecf5eb"))
-        button.add_theme_stylebox_override("normal", normal.duplicate())
-        button.add_theme_stylebox_override("hover", normal.duplicate())
-        button.add_theme_stylebox_override("pressed", pressed.duplicate())
-        actions.add_child(button)
-    selection_button.pressed.connect(func() -> void: _set_squad_selected(not squad_selected))
-    stop_button.pressed.connect(_stop_squad)
-    _update_squad_hud()
+    content.add_theme_constant_override("separation", 8)
+    hud_panel.add_child(content)
+    var selectors := HBoxContainer.new()
+    selectors.add_theme_constant_override("separation", 8)
+    content.add_child(selectors)
+    for id in range(4):
+        var button := _button("Гр. " + str(id + 1), "Group" + str(id + 1), _select_unit.bind(id), Vector2(85, 62))
+        selectors.add_child(button)
+        unit_buttons.append(button)
+    drone_button = _button("Дрон", "SelectDrone", _select_drone, Vector2(104, 62))
+    post_button = _button("НП", "SelectPost", _select_post, Vector2(82, 62))
+    selectors.add_child(drone_button)
+    selectors.add_child(post_button)
+    selection_label = _label("ГРУППА 1", 26)
+    content.add_child(selection_label)
+    status_label = _label("Переставьте позиции на своей половине", 24)
+    status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    status_label.custom_minimum_size.y = 64.0
+    content.add_child(status_label)
+    var commands := GridContainer.new()
+    commands.columns = 4
+    commands.add_theme_constant_override("h_separation", 8)
+    commands.add_theme_constant_override("v_separation", 8)
+    content.add_child(commands)
+    var captions := {"move": "Двигаться", "capture": "Занять", "assault": "Штурм", "stop": "СТОП", "fortify": "Закрепиться", "reinforce": "Пополнить", "resupply": "Боезапас", "return_drone": "Вернуть дрон"}
+    for key: String in captions:
+        var button := _button(captions[key], key, _choose_command.bind(key))
+        commands.add_child(button)
+        mode_buttons[key] = button
     _layout_camera_controls()
+    _update_battle_hud()
 
 func _layout_camera_controls() -> void:
-    if not is_instance_valid(focus_button):
+    if legacy_regression_mode:
+        super._layout_camera_controls()
+        return
+    if not is_instance_valid(hud_panel):
         return
     var viewport: Vector2 = get_viewport_rect().size
-    var margin: float = clampf(minf(viewport.x, viewport.y) * 0.035, 12.0, 40.0)
-    focus_button.size = Vector2(minf(360.0, maxf(160.0, viewport.x - margin * 2.0)), minf(112.0, maxf(56.0, viewport.y - margin * 2.0)))
+    var margin: float = clampf(minf(viewport.x, viewport.y) * 0.03, 12.0, 34.0)
+    hud_panel.size = Vector2(760.0, 360.0)
+    hud_panel.position = Vector2(margin, viewport.y - hud_panel.size.y - margin)
+    territory_panel.size = Vector2(600, 106)
+    territory_panel.position = Vector2((viewport.x - territory_panel.size.x) * 0.5, margin)
+    conditions_panel.size = Vector2(500, 130)
+    conditions_panel.position = Vector2(margin, margin)
+    focus_button.size = Vector2(320, 88)
     focus_button.position = Vector2(viewport.x - focus_button.size.x - margin, margin)
-    if is_instance_valid(squad_panel):
-        squad_panel.size = Vector2(520.0, 220.0)
-        squad_panel.position = Vector2(margin, viewport.y - squad_panel.size.y - margin)
-
-func _update_squad_hud() -> void:
-    if not is_instance_valid(squad_status):
-        return
-    var moving: bool = not path.is_empty() and path_next < path.size()
-    var status: String = "В пути" if moving else "Ожидает приказа"
-    if not squad_selected:
-        status = "Не выбран · " + status
-    if squad_notice_timer > 0.0:
-        status = squad_notice
-    if squad_status.text != status:
-        squad_status.text = status
-    selection_button.text = "Снять выбор" if squad_selected else "Выбрать отряд"
-    stop_button.disabled = not squad_selected or not moving
-
-func _set_squad_selected(value: bool) -> void:
-    _cancel_touch_gesture()
-    squad_selected = value
-    squad_notice_timer = 0.0
-    _update_squad_hud()
-    queue_redraw()
-
-func _stop_squad() -> void:
-    _cancel_touch_gesture()
-    if not squad_selected:
-        return
-    path.clear()
-    path_next = 0
-    blocked_timer = 0.0
-    squad_notice_timer = 0.0
-    _update_squad_hud()
-    queue_redraw()
-
-func _squad_screen_rect() -> Rect2:
-    if not is_instance_valid(camera):
-        return Rect2()
-    var center: Vector2 = get_viewport_rect().size * 0.5 + (ball_pos - camera.position) * camera.zoom
-    return Rect2(center - SQUAD_MARKER_SIZE * 0.5, SQUAD_MARKER_SIZE).grow(SQUAD_TOUCH_PADDING)
-
-func _handle_map_tap(screen_point: Vector2) -> void:
-    if _squad_screen_rect().has_point(screen_point):
-        _set_squad_selected(true)
-    elif squad_selected:
-        _request_move(screen_point)
-    else:
-        squad_notice = "Сначала выберите отряд"
-        squad_notice_timer = 1.8
-        _update_squad_hud()
-
-func _focus_marker() -> void:
-    _cancel_touch_gesture()
-    if not is_instance_valid(camera):
-        return
-    camera.position = ball_pos
-    _clamp_camera()
+    start_button.size = Vector2(360, 88)
+    start_button.position = Vector2(viewport.x - start_button.size.x - margin, margin + 102)
+    pause_button.size = start_button.size
+    pause_button.position = start_button.position
 
 func _camera_button_contains(screen_point: Vector2) -> bool:
-    return ((is_instance_valid(focus_button) and focus_button.visible and focus_button.get_global_rect().has_point(screen_point))
-        or (is_instance_valid(squad_panel) and squad_panel.visible and squad_panel.get_global_rect().has_point(screen_point)))
+    if legacy_regression_mode:
+        return super._camera_button_contains(screen_point)
+    for control in [hud_panel, territory_panel, conditions_panel, focus_button, start_button, pause_button]:
+        if is_instance_valid(control) and control.visible and control.get_global_rect().has_point(screen_point):
+            return true
+    return false
 
-func _zoom_camera_at(screen_point: Vector2, factor: float) -> void:
-    _transform_camera(screen_point, screen_point, factor)
+func _select_unit(id: int) -> void:
+    _cancel_touch_gesture()
+    selected_unit = id
+    selected_drone = false
+    selected_post = false
+    command_mode = "move"
+    _sync_selection()
 
-func _transform_camera(old_screen_center: Vector2, new_screen_center: Vector2, factor: float) -> void:
-    if not is_instance_valid(camera) or not is_finite(factor) or factor <= 0.0:
+func _select_drone() -> void:
+    _cancel_touch_gesture()
+    selected_unit = -1
+    selected_drone = true
+    selected_post = false
+    command_mode = "move"
+    _sync_selection()
+
+func _select_post() -> void:
+    _cancel_touch_gesture()
+    selected_unit = -1
+    selected_drone = false
+    selected_post = true
+    command_mode = "move"
+    _sync_selection()
+
+func _sync_selection() -> void:
+    if view != null:
+        view.selected_id = selected_unit
+        view.selected_drone = selected_drone
+        view.target_mode = command_mode
+        view.queue_redraw()
+    _update_battle_hud()
+
+func _notice(text_value: String) -> void:
+    _battle_message = text_value
+    _message_timer = 3.0
+    _update_battle_hud()
+
+func _choose_command(key: String) -> void:
+    _cancel_touch_gesture()
+    if model == null or model.phase == "ended":
         return
-    var anchor: Vector2 = _screen_to_world(old_screen_center)
-    var new_zoom: float = clampf(camera.zoom.x * factor, camera_min_zoom, camera_max_zoom)
-    camera.zoom = Vector2.ONE * new_zoom
-    camera.position = anchor - (new_screen_center - get_viewport_rect().size * 0.5) / new_zoom
+    if key == "return_drone":
+        model.return_drone()
+    elif selected_drone and key == "capture":
+        command_mode = "sector"
+        _notice("Тапните направление обзора дрона")
+    elif key == "stop":
+        if selected_drone:
+            model.return_drone()
+        elif selected_unit >= 0:
+            model.order_stop(selected_unit)
+    elif key == "fortify" and selected_unit >= 0:
+        if not model.order_fortify(selected_unit):
+            _notice(str(model.last_error))
+    elif key == "reinforce" and selected_unit >= 0:
+        if not model.reinforce(selected_unit):
+            _notice("Пополнение: блиндаж, вне боя, запас снабжения")
+    elif key == "resupply" and selected_unit >= 0:
+        if not model.resupply(selected_unit):
+            _notice("Боезапас: блиндаж, вне боя, запас снабжения")
+    else:
+        command_mode = key
+        if key == "capture" or key == "assault":
+            _notice("Тапните участок для захвата")
+    _sync_selection()
+
+func _handle_map_tap(screen_point: Vector2) -> void:
+    if legacy_regression_mode:
+        super._handle_map_tap(screen_point)
+        return
+    if model == null or model.phase == "ended" or model.paused:
+        return
+    var point: Vector2 = _screen_to_world(screen_point)
+    var hit: int = view.squad_hit_test(point, camera.zoom.x)
+    if hit >= 0:
+        var unit: Dictionary = model.unit_by_id(hit)
+        if not unit.is_empty() and int(unit.side) == 0:
+            _select_unit(hit)
+            return
+    if view.drone_hit_test(point, camera.zoom.x):
+        _select_drone()
+        return
+    if selected_drone:
+        if command_mode == "sector":
+            var drone_pos: Vector2 = model.drone.pos
+            model.drone.heading = (point - drone_pos).angle()
+            _notice("Направление обзора задано")
+        elif not model.assign_drone(point, float(model.drone.get("heading", 0.0))):
+            _notice("Точка вне дальности связи дрона")
+        _update_battle_hud()
+        return
+    if selected_post:
+        if model.phase == "prepare":
+            if not model.relocate_post(point):
+                _notice("НП размещается на доступной суше нашей половины")
+        else:
+            _notice("После начала боя НП остаётся на своей позиции")
+        return
+    if selected_unit < 0:
+        _notice("Выберите одну из четырёх групп")
+        return
+    var accepted := false
+    if model.phase == "prepare":
+        accepted = model.relocate(selected_unit, point)
+    elif command_mode == "capture" or command_mode == "assault" or hit >= 0:
+        accepted = model.order_capture(selected_unit, point)
+    else:
+        accepted = model.order_move(selected_unit, point)
+    if not accepted:
+        blocked_at = point
+        blocked_timer = 0.7
+        _notice("Здесь нет допустимого прохода или позиции")
+    _update_battle_hud()
+
+func _focus_marker() -> void:
+    if legacy_regression_mode:
+        super._focus_marker()
+        return
+    _cancel_touch_gesture()
+    if model == null:
+        return
+    if selected_drone:
+        camera.position = model.drone.pos
+    elif selected_post:
+        for structure in model.structures:
+            if structure.kind == "post" and int(structure.side) == 0:
+                camera.position = structure.pos
+                break
+    elif selected_unit >= 0:
+        var unit: Dictionary = model.unit_by_id(selected_unit)
+        if not unit.is_empty():
+            camera.position = unit.pos
     _clamp_camera()
 
-func _cancel_touch_gesture() -> void:
-    touch_points.clear()
-    touch_down = false
-    touch_moved = false
-    gesture_was_multi = false
-    single_touch_index = -1
-    pinch_ids = Vector2i(-1, -1)
-    pinch_distance = 0.0
+func _set_weather(index: int) -> void:
+    if model != null and model.phase == "prepare":
+        model.weather = WEATHER_KEYS[index]
+        model.visibility.weather = model.weather
+        _update_battle_hud()
 
-func _rebase_pinch() -> void:
-    if touch_points.size() < 2:
-        pinch_ids = Vector2i(-1, -1)
-        pinch_distance = 0.0
+func _set_time(index: int) -> void:
+    if model != null and model.phase == "prepare":
+        model.time_of_day = TIME_KEYS[index]
+        model.visibility.time_of_day = model.time_of_day
+        _update_battle_hud()
+
+func _start_battle() -> void:
+    _cancel_touch_gesture()
+    if model == null:
         return
-    if not touch_points.has(pinch_ids.x) or not touch_points.has(pinch_ids.y):
-        var ids: Array = touch_points.keys()
-        ids.sort()
-        pinch_ids = Vector2i(int(ids[0]), int(ids[1]))
-    var first: Vector2 = touch_points[pinch_ids.x]
-    var second: Vector2 = touch_points[pinch_ids.y]
-    pinch_distance = first.distance_to(second)
-    pinch_center = (first + second) * 0.5
+    if model.phase == "ended":
+        var visibility = model.visibility
+        model.setup(nav, nav_types, WORLD_SIZE, visibility, battle_config)
+        weather_option.select(0)
+        time_option.select(0)
+        _select_unit(0)
+        _focus_marker()
+    elif not model.start_battle():
+        _notice("Все четыре группы и НП должны стоять на допустимых местах")
+    _update_battle_hud()
 
-func _begin_map_touch(e: InputEventScreenTouch) -> void:
-    if touch_points.has(e.index):
-        return
-    touch_points[e.index] = e.position
-    touch_down = true
-    if touch_points.size() == 1:
-        single_touch_index = e.index
-        touch_start = e.position
-        touch_last = e.position
-        touch_moved = false
-        gesture_was_multi = false
-    else:
-        gesture_was_multi = true
-        touch_moved = true
-        _rebase_pinch()
-
-func _finish_map_touch(e: InputEventScreenTouch, allow_tap: bool) -> void:
-    if e.canceled:
-        _cancel_touch_gesture()
-        return
-    if not touch_points.has(e.index):
-        return
-    var can_order: bool = allow_tap and touch_points.size() == 1 and not gesture_was_multi and not touch_moved and e.position.distance_to(touch_start) <= TAP_SLOP
-    touch_points.erase(e.index)
-    touch_down = not touch_points.is_empty()
-    if touch_points.is_empty():
-        _cancel_touch_gesture()
-        if can_order:
-            _handle_map_tap(e.position)
-    elif touch_points.size() == 1:
-        # After a pinch the remaining finger may pan, but cannot become a tap.
-        gesture_was_multi = true
-        touch_moved = true
-        var ids: Array = touch_points.keys()
-        single_touch_index = int(ids[0])
-        touch_start = touch_points[single_touch_index]
-        touch_last = touch_start
-        pinch_ids = Vector2i(-1, -1)
-        pinch_distance = 0.0
-    else:
-        _rebase_pinch()
-
-func _drag_map_touch(e: InputEventScreenDrag) -> void:
-    if not touch_points.has(e.index):
-        return
-    var old_position: Vector2 = touch_points[e.index]
-    touch_points[e.index] = e.position
-    if touch_points.size() >= 2:
-        if e.index != pinch_ids.x and e.index != pinch_ids.y:
-            return
-        var first: Vector2 = touch_points[pinch_ids.x]
-        var second: Vector2 = touch_points[pinch_ids.y]
-        var new_distance: float = first.distance_to(second)
-        var new_center: Vector2 = (first + second) * 0.5
-        var factor := 1.0
-        if pinch_distance >= MIN_PINCH_DISTANCE and new_distance >= MIN_PINCH_DISTANCE:
-            factor = new_distance / pinch_distance
-        _transform_camera(pinch_center, new_center, factor)
-        pinch_distance = new_distance
-        pinch_center = new_center
-    else:
-        if e.position.distance_to(touch_start) > TAP_SLOP:
-            touch_moved = true
-        if touch_moved:
-            camera.position -= (e.position - old_position) / camera.zoom
-            _clamp_camera()
-        touch_last = e.position
-
-func _input(event: InputEvent) -> void:
-    # GUI can consume a release over the button before _unhandled_input sees it.
-    # Track those cases here without intercepting the Button's normal GUI input.
-    if event is InputEventScreenTouch:
-        var e := event as InputEventScreenTouch
-        if e.pressed and _camera_button_contains(e.position):
-            ui_touch_ids[e.index] = true
-            _cancel_touch_gesture()
-        elif ui_touch_ids.has(e.index):
-            if not e.pressed or e.canceled:
-                ui_touch_ids.erase(e.index)
-                _cancel_touch_gesture()
-        elif not e.pressed and touch_points.has(e.index) and _camera_button_contains(e.position):
-            _finish_map_touch(e, false)
-            get_viewport().set_input_as_handled()
-    elif event is InputEventScreenDrag:
-        var e := event as InputEventScreenDrag
-        if touch_points.has(e.index) and _camera_button_contains(e.position):
-            _drag_map_touch(e)
-            get_viewport().set_input_as_handled()
-
-func _clamp_camera() -> void:
-    if not is_instance_valid(camera):
-        return
-    var half_view: Vector2 = get_viewport_rect().size * 0.5 / camera.zoom
-    camera.position.x = clampf(camera.position.x, minf(half_view.x, WORLD_SIZE.x * 0.5), maxf(WORLD_SIZE.x - half_view.x, WORLD_SIZE.x * 0.5))
-    camera.position.y = clampf(camera.position.y, minf(half_view.y, WORLD_SIZE.y * 0.5), maxf(WORLD_SIZE.y - half_view.y, WORLD_SIZE.y * 0.5))
-    queue_redraw()
-
-func _cell_from_world(p: Vector2) -> Vector2i:
-    return Vector2i(floori(p.x / nav_cell.x), floori(p.y / nav_cell.y))
-
-func _inside(cell: Vector2i) -> bool:
-    return cell.x >= 0 and cell.y >= 0 and cell.x < nav_size.x and cell.y < nav_size.y
-
-func _type_at(p: Vector2) -> int:
-    var cell: Vector2i = _cell_from_world(p)
-    if not _inside(cell):
-        return CELL_HOUSE
-    return int(nav_types[cell.y * nav_size.x + cell.x])
-
-func _request_move(screen_point: Vector2) -> void:
-    if not squad_selected:
-        return
-    var world: Vector2 = _screen_to_world(screen_point)
-    var dst: Vector2i = _cell_from_world(world)
-    if not _inside(dst) or nav.is_point_solid(dst):
-        _reject(world)
-        return
-    var src: Vector2i = _cell_from_world(ball_pos)
-    if not _inside(src) or nav.is_point_solid(src):
-        _reject(world)
-        return
-    var result: PackedVector2Array = nav.get_point_path(src, dst)
-    if result.is_empty():
-        _reject(world)
-        return
-    # Defence in depth: a route must never contain a water or building cell.
-    for waypoint in result:
-        var waypoint_cell: Vector2i = _cell_from_world(waypoint)
-        if not _inside(waypoint_cell) or nav.is_point_solid(waypoint_cell):
-            _reject(world)
-            return
-    path = result
-    path_next = 1 if path.size() > 1 else 0
-    blocked_timer = 0.0
-    squad_notice_timer = 0.0
-    _update_squad_hud()
-    queue_redraw()
-
-func _screen_to_world(screen_point: Vector2) -> Vector2:
-    var center: Vector2 = get_viewport_rect().size * 0.5
-    return camera.position + (screen_point - center) / camera.zoom
-
-func _reject(world: Vector2) -> void:
-    blocked_at = world
-    blocked_timer = 0.7
-    squad_notice = "Нет прохода к этой точке"
-    squad_notice_timer = 1.8
-    _update_squad_hud()
-    queue_redraw()
+func _toggle_pause() -> void:
+    _cancel_touch_gesture()
+    if model != null and model.phase == "battle":
+        model.paused = not model.paused
+        _update_battle_hud()
 
 func _process(delta: float) -> void:
-    if squad_notice_timer > 0.0:
-        squad_notice_timer = maxf(0.0, squad_notice_timer - delta)
-        if squad_notice_timer == 0.0:
-            _update_squad_hud()
+    if legacy_regression_mode:
+        super._process(delta)
+        return
+    if model == null:
+        return
+    model.advance(delta)
     if blocked_timer > 0.0:
         blocked_timer = maxf(0.0, blocked_timer - delta)
         queue_redraw()
-    if path_next >= path.size() or path.size() == 0:
-        return
-    var point: Vector2 = path[path_next]
-    var movement_scale := 1.0
-    match _type_at(ball_pos):
-        CELL_ROAD:
-            movement_scale = 1.4
-        CELL_WOODS:
-            movement_scale = 0.65
-        CELL_FIELD:
-            movement_scale = 0.9
-        CELL_BRIDGE:
-            movement_scale = 1.0
-    var step: float = 280.0 * movement_scale * minf(delta, 0.08)
-    ball_pos = ball_pos.move_toward(point, step)
-    if ball_pos.distance_to(point) < 0.1:
-        path_next += 1
-        if path_next >= path.size():
-            path.clear()
-            path_next = 0
-            _update_squad_hud()
-    queue_redraw()
+    _message_timer = maxf(0.0, _message_timer - delta)
+    _hud_timer -= delta
+    if _hud_timer <= 0.0:
+        _hud_timer = 0.15
+        _update_battle_hud()
 
-func _draw() -> void:
-    if not is_instance_valid(camera):
+func _update_battle_hud() -> void:
+    if model == null or not is_instance_valid(status_label):
         return
-    var unit_scale: float = 1.0 / camera.zoom.x
-    if squad_selected and path.size() > 0 and path_next < path.size():
-        var points := PackedVector2Array([ball_pos])
-        for i in range(path_next, path.size()):
-            points.append(path[i])
-        if points.size() > 1:
-            draw_polyline(points, Color(0.18, 0.94, 0.72, 0.75), 4.0 * unit_scale, true)
-        draw_circle(path[-1], 14.0 * unit_scale, Color(0.18, 0.94, 0.72, 0.9), false, 3.0 * unit_scale, true)
-    # A tactical infantry counter represents the whole squad, not individual soldiers.
-    var marker_size: Vector2 = SQUAD_MARKER_SIZE * unit_scale
-    var marker := Rect2(ball_pos - marker_size * 0.5, marker_size)
-    draw_rect(Rect2(marker.position + Vector2(5.0, 7.0) * unit_scale, marker.size), Color(0.01, 0.02, 0.025, 0.65))
-    if squad_selected:
-        draw_rect(marker.grow(9.0 * unit_scale), Color(0.88, 1.0, 0.68, 0.95), false, 3.0 * unit_scale)
-    draw_rect(marker, Color(0.035, 0.15, 0.13, 0.96))
-    draw_rect(marker, Color(0.39, 0.89, 0.70, 0.96), false, 3.0 * unit_scale)
-    var symbol := Rect2(ball_pos + Vector2(-31.0, -22.0) * unit_scale, Vector2(62.0, 36.0) * unit_scale)
-    var ink := Color(0.82, 1.0, 0.91, 1.0)
-    draw_rect(symbol, ink, false, 3.0 * unit_scale)
-    draw_line(symbol.position, symbol.end, ink, 3.0 * unit_scale, true)
-    draw_line(Vector2(symbol.end.x, symbol.position.y), Vector2(symbol.position.x, symbol.end.y), ink, 3.0 * unit_scale, true)
-    draw_string(ThemeDB.fallback_font, ball_pos + Vector2(-8.0, 34.0) * unit_scale, "1", HORIZONTAL_ALIGNMENT_LEFT, -1.0, maxi(1, roundi(22.0 * unit_scale)), ink)
-    if blocked_timer > 0:
-        draw_arc(blocked_at, 70.0 + (0.7-blocked_timer)*25.0, 0.0, TAU, 36, Color(1.0, 0.29, 0.23, blocked_timer), 12.0)
-
-func _unhandled_input(event: InputEvent) -> void:
-    if returning:
-        return
-    if event.is_action_pressed("ui_cancel"):
-        _return_to_menu()
-        get_viewport().set_input_as_handled()
-        return
-    if event is InputEventScreenTouch:
-        var e := event as InputEventScreenTouch
-        if e.canceled:
-            _cancel_touch_gesture()
-        elif ui_touch_ids.has(e.index) or not ui_touch_ids.is_empty():
-            pass
-        elif e.pressed:
-            if not _camera_button_contains(e.position):
-                _begin_map_touch(e)
+    territory_label.text = "НАШИ %.1f%%   |   ПРОТИВНИК %.1f%%" % [model.percent(0), model.percent(1)]
+    var preparing: bool = model.phase == "prepare"
+    var ended: bool = model.phase == "ended"
+    if preparing:
+        phase_label.text = "ПОДГОТОВКА · БЕЗ ТАЙМЕРА"
+    elif ended:
+        phase_label.text = "НИЧЬЯ" if int(model.winner) == -2 else ("ПОБЕДА" if int(model.winner) == 0 else "ПОРАЖЕНИЕ")
+    else:
+        phase_label.text = "ПАУЗА" if model.paused else "БОЙ · ЗАХВАТ И УДЕРЖАНИЕ"
+    start_button.visible = preparing or ended
+    start_button.text = "ЗАНОВО" if ended else "НАЧАТЬ БОЙ"
+    pause_button.visible = not preparing and not ended
+    pause_button.text = "ПРОДОЛЖИТЬ" if model.paused else "ПАУЗА"
+    weather_option.disabled = not preparing
+    time_option.disabled = not preparing
+    for id in range(unit_buttons.size()):
+        var unit: Dictionary = model.unit_by_id(id)
+        var count: int = model.alive_count(unit) if not unit.is_empty() else 0
+        unit_buttons[id].text = "Гр.%d %d" % [id + 1, count]
+        unit_buttons[id].disabled = count == 0
+    focus_button.text = "К ДРОНУ" if selected_drone else ("К НП" if selected_post else "К ОТРЯДУ")
+    var status := ""
+    if selected_drone:
+        var states := {"ready": "Готов", "flying": "Летит", "observing": "Наблюдает", "returning": "Возвращается", "charging": "Заряжается"}
+        selection_label.text = "ДРОН · %s · ЗАРЯД %d%%" % [states.get(model.drone.state, model.drone.state), roundi(float(model.drone.charge))]
+        status = "Тап: точка наблюдения. «Сектор»: направление"
+    elif selected_post:
+        selection_label.text = "НАБЛЮДАТЕЛЬНЫЙ ПОСТ"
+        status = "Тап: переставить НП на своей половине" if preparing else "НП обеспечивает связь с дроном"
+    elif selected_unit >= 0:
+        var unit: Dictionary = model.unit_by_id(selected_unit)
+        if not unit.is_empty():
+            selection_label.text = "ГРУППА %d · %d/%d · БОЕЗАПАС %d" % [selected_unit + 1, model.alive_count(unit), int(battle_config.get("squad_size", 6)), roundi(float(unit.ammo))]
+            var orders := {"idle": "Ожидает", "move": "Движется", "capture": "Захватывает", "fortify": "Закрепляется", "dead": "Уничтожена", "hold": "Удерживает"}
+            status = "Тап: переставить позицию на своей половине" if preparing else str(orders.get(unit.order, unit.order))
+            if model.alive_count(unit) == 0:
+                status = "Группа уничтожена"
+    else:
+        selection_label.text = "ВЫБЕРИТЕ ГРУППУ ИЛИ ДРОН"
+    if _message_timer > 0.0:
+        status = _battle_message
+    status_label.text = status + " · Снабжение %d" % roundi(float(model.supplies[0]))
+    if ended:
+        var survivors := 0
+        for unit in model.units:
+            if int(unit.side) == 0:
+                survivors += model.alive_count(unit)
+        var roster: int = 4 * int(battle_config.get("squad_size", 6))
+        status_label.text = "Наши потери: %d из %d. Нажмите «Заново»" % [roster - survivors, roster]
+    for key in mode_buttons:
+        var button: Button = mode_buttons[key]
+        button.disabled = ended or model.paused
+        if selected_drone:
+            button.disabled = button.disabled or key not in ["move", "capture", "stop", "return_drone"]
+        elif selected_post:
+            button.disabled = button.disabled or key != "move" or not preparing
         else:
-            _finish_map_touch(e, not _camera_button_contains(e.position))
-        get_viewport().set_input_as_handled()
-    elif event is InputEventScreenDrag:
-        var e := event as InputEventScreenDrag
-        if ui_touch_ids.is_empty():
-            _drag_map_touch(e)
-        get_viewport().set_input_as_handled()
-    elif event is InputEventMouseButton:
-        var e := event as InputEventMouseButton
-        if OS.get_name() == "Android" or e.device < 0 or touch_down:
-            return
-        # Desktop / debugging support; Android touch is processed above.
-        if e.pressed and e.button_index == MOUSE_BUTTON_LEFT and not touch_down:
-            if not _camera_button_contains(e.position):
-                _handle_map_tap(e.position)
-            get_viewport().set_input_as_handled()
-        elif e.pressed and (e.button_index == MOUSE_BUTTON_WHEEL_UP or e.button_index == MOUSE_BUTTON_WHEEL_DOWN):
-            var scale_factor := 1.16 if e.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0 / 1.16
-            _zoom_camera_at(e.position, scale_factor)
-            get_viewport().set_input_as_handled()
+            button.disabled = button.disabled or selected_unit < 0 or (preparing and key != "move") or key == "return_drone"
+            if selected_unit >= 0:
+                button.disabled = button.disabled or model.alive_count(model.unit_by_id(selected_unit)) == 0
+    mode_buttons["move"].text = "Переставить" if preparing and not selected_drone else "Двигаться"
+    mode_buttons["capture"].text = "Сектор" if selected_drone else "Занять"
 
 func _notification(what: int) -> void:
-    if what == NOTIFICATION_WM_GO_BACK_REQUEST:
-        _return_to_menu()
-    elif what == NOTIFICATION_APPLICATION_FOCUS_OUT or what == NOTIFICATION_APPLICATION_PAUSED:
-        _cancel_touch_gesture()
-        ui_touch_ids.clear()
+    super._notification(what)
+    if not legacy_regression_mode and model != null and model.phase == "battle":
+        if what == NOTIFICATION_APPLICATION_FOCUS_OUT or what == NOTIFICATION_APPLICATION_PAUSED:
+            model.paused = true
+            _update_battle_hud()
 
-func _return_to_menu() -> void:
-    _cancel_touch_gesture()
-    ui_touch_ids.clear()
-    if returning:
-        return
-    returning = true
-    call_deferred("_open_menu")
-
-func _open_menu() -> void:
-    if is_inside_tree():
-        get_tree().change_scene_to_file(MENU_SCENE)
+func _draw() -> void:
+    if legacy_regression_mode:
+        super._draw()
+    elif blocked_timer > 0.0 and is_instance_valid(camera):
+        draw_arc(blocked_at, 24.0 / camera.zoom.x, 0.0, TAU, 32, Color(1.0, 0.30, 0.25, blocked_timer), 4.0 / camera.zoom.x, true)
