@@ -1,0 +1,107 @@
+{
+  "id": "field_sector_alpha_expanded",
+  "version": "0.3.2-fourfold",
+  "world_size": [
+    12800,
+    7200
+  ],
+  "home_sector_world_size": [
+    6400,
+    3600
+  ],
+  "art_size": [
+    3344,
+    1882
+  ],
+  "navigation_cells": [
+    418,
+    236
+  ],
+  "coordinate_system": "local_2d (2.5D rendered image)",
+  "sectors": [
+    {
+      "id": "home_northwest",
+      "coordinates": [
+        0,
+        0,
+        6400,
+        3600
+      ],
+      "art": "approved original sector"
+    },
+    {
+      "id": "future_opponent_northeast",
+      "coordinates": [
+        6400,
+        0,
+        12800,
+        3600
+      ],
+      "art": "temporarily mirrored and warped sector"
+    },
+    {
+      "id": "southwest",
+      "coordinates": [
+        0,
+        3600,
+        6400,
+        7200
+      ],
+      "art": "temporarily mirrored and warped sector"
+    },
+    {
+      "id": "southeast",
+      "coordinates": [
+        6400,
+        3600,
+        12800,
+        7200
+      ],
+      "art": "temporarily rotated and warped sector"
+    }
+  ],
+  "navigation_mask": "res://assets/map/navigation_v0.3.2.png",
+  "navigation_legend": {
+    "field": [
+      200,
+      200,
+      200
+    ],
+    "road": [
+      255,
+      0,
+      0
+    ],
+    "forest_belt": [
+      0,
+      255,
+      0
+    ],
+    "building_blocked": [
+      0,
+      0,
+      0
+    ],
+    "water_blocked": [
+      0,
+      0,
+      255
+    ],
+    "bridge": [
+      255,
+      255,
+      0
+    ]
+  },
+  "costs": {
+    "road": 1.0,
+    "field": 1.6,
+    "forest_belt": 2.7,
+    "bridge": 1.1
+  },
+  "solid_types": [
+    "building_blocked",
+    "water_blocked"
+  ],
+  "design_note": "2x in both world axes with pixel-aligned navigation; temporary transformed neighbors will be hand-authored independently later. The map is not enlarged by scaling the old image."
+}

@@ -1,11 +1,14 @@
 extends Node2D
 
-# v0.3.1: approved angled landscape + a real walkability grid and one test marker.
+# v0.3.2: four play-sized sectors, 4x walkable area and the same working test ball.
 # No game combat logic, structures, or HUD. Tap a point to pathfind, swipe to pan.
-const MAP_TEXTURE: Texture2D = preload("res://assets/map/terrain_v0.3.1.png")
-const NAV_TEXTURE: Texture2D = preload("res://assets/map/navigation_v0.3.1.png")
+const MAP_TEXTURE: Texture2D = preload("res://assets/map/terrain_v0.3.2.png")
+const NAV_TEXTURE: Texture2D = preload("res://assets/map/navigation_v0.3.2.png")
 const MENU_SCENE := "res://scenes/main_menu.tscn"
-const WORLD_SIZE := Vector2(6400.0, 3600.0)
+const WORLD_SIZE := Vector2(12800.0, 7200.0)
+const SECTOR_SIZE := Vector2(6400.0, 3600.0)
+const EXPECTED_NAV_SIZE := Vector2i(418, 236)
+const EXPECTED_TEXTURE_SIZE := Vector2i(3344, 1882)
 const CELL_FIELD := 0
 const CELL_ROAD := 1
 const CELL_WOODS := 2
@@ -37,6 +40,9 @@ func _ready() -> void:
         push_error("Navigation grid not imported")
         return
     nav_size = Vector2i(img.get_width(), img.get_height())
+    if nav_size != EXPECTED_NAV_SIZE or MAP_TEXTURE.get_size() != EXPECTED_TEXTURE_SIZE:
+        push_error("Map and navigation sizes do not match v0.3.2 fourfold expansion")
+        return
     nav_cell = WORLD_SIZE / Vector2(nav_size)
     nav = AStarGrid2D.new()
     nav.region = Rect2i(Vector2i.ZERO, nav_size)
@@ -87,7 +93,8 @@ func _ready() -> void:
 
     camera = Camera2D.new()
     camera.enabled = true
-    camera.position = WORLD_SIZE * 0.5
+    # Open in the original home sector, rather than zooming out and shrinking every building.
+    camera.position = SECTOR_SIZE * 0.5
     camera.position_smoothing_enabled = false
     add_child(camera)
     get_viewport().size_changed.connect(_resize_camera)
@@ -110,6 +117,22 @@ func _ready() -> void:
         print("SMOKE_NAV_ROUTE_FOUND")
     else:
         push_error("Navigation path test failed")
+    if nav_size == EXPECTED_NAV_SIZE and WORLD_SIZE == Vector2(12800.0, 7200.0):
+        print("SMOKE_NAV_FOUR_SECTORS")
+    else:
+        push_error("Expanded world size failed")
+    # Check actual traversability across the NEW seams, not merely within the old sector.
+    var east: Vector2i = Vector2i(310, 56)
+    var south: Vector2i = Vector2i(100, 178)
+    if (
+        not nav.is_point_solid(east)
+        and not nav.is_point_solid(south)
+        and nav.get_point_path(spawn, east).size() > 30
+        and nav.get_point_path(spawn, south).size() > 30
+    ):
+        print("SMOKE_NAV_CROSS_SECTOR_ROUTES")
+    else:
+        push_error("Expanded sectors are not connected by walkable routes")
 
 func _classify_color(p: Color) -> int:
     # Colors in authored grid are RGB primaries; no interpolation is used here.
@@ -129,8 +152,10 @@ func _resize_camera() -> void:
     if not is_instance_valid(camera):
         return
     var viewport: Vector2 = get_viewport_rect().size
+    # Minimum permits strategic whole-map view; initial view retains the old world scale.
     camera_min_zoom = maxf(viewport.x / WORLD_SIZE.x, viewport.y / WORLD_SIZE.y)
-    camera.zoom = Vector2.ONE * maxf(camera_min_zoom, 0.01)
+    var sector_zoom: float = maxf(viewport.x / SECTOR_SIZE.x, viewport.y / SECTOR_SIZE.y)
+    camera.zoom = Vector2.ONE * maxf(sector_zoom, camera_min_zoom)
     _clamp_camera()
 
 func _clamp_camera() -> void:
@@ -260,7 +285,7 @@ func _unhandled_input(event: InputEvent) -> void:
             get_viewport().set_input_as_handled()
         elif e.pressed and (e.button_index == MOUSE_BUTTON_WHEEL_UP or e.button_index == MOUSE_BUTTON_WHEEL_DOWN):
             var scale_factor := 1.16 if e.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0 / 1.16
-            var new_zoom := clampf(camera.zoom.x * scale_factor, camera_min_zoom * 0.92, camera_min_zoom * 3.0)
+            var new_zoom := clampf(camera.zoom.x * scale_factor, camera_min_zoom, maxf(camera_min_zoom * 3.0, maxf(get_viewport_rect().size.x / SECTOR_SIZE.x, get_viewport_rect().size.y / SECTOR_SIZE.y) * 3.0))
             camera.zoom = Vector2.ONE * new_zoom
             _clamp_camera()
             get_viewport().set_input_as_handled()

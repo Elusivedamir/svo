@@ -75,6 +75,17 @@ jobs:
           GODOT="$RUNNER_TEMP/godot/Godot_v4.5.2-stable_linux.x86_64"
           export GODOT_ANDROID_KEYSTORE_DEBUG_PATH="$RUNNER_TEMP/debug.keystore"
           mkdir -p build
+          python3 - <<'PYMAP'
+          import struct
+          from pathlib import Path
+          expect={"assets/map/terrain_v0.3.2.png":(3344,1882),"assets/map/navigation_v0.3.2.png":(418,236)}
+          for file,size in expect.items():
+              b=Path(file).read_bytes()[:24]
+              assert b[:8]==b"\x89PNG\r\n\x1a\n",file
+              dims=struct.unpack(">II",b[16:24])
+              assert dims==size,(file,dims,size)
+              print("PASS PNG",file,dims)
+          PYMAP
           "$GODOT" --headless --path . --editor --quit
           # Run the real launch scene, not just the exporter: black-screen regressions must fail CI.
           set +e
@@ -106,7 +117,7 @@ jobs:
           fi
           # Also launch the actual terrain scene, not only the menu.
           set +e
-          timeout 10s "$GODOT" --headless --audio-driver Dummy --path . res://scenes/world_map.tscn > "$RUNNER_TEMP/map_smoke.log" 2>&1
+          timeout 20s "$GODOT" --headless --audio-driver Dummy --path . res://scenes/world_map.tscn > "$RUNNER_TEMP/map_smoke.log" 2>&1
           map_exit=$?
           set -e
           cat "$RUNNER_TEMP/map_smoke.log"
@@ -122,7 +133,7 @@ jobs:
             echo "ERROR: Map scene did not initialize"
             exit 1
           fi
-          for marker in SMOKE_NAV_READY SMOKE_NAV_OBSTACLES_BLOCKED SMOKE_NAV_ROUTE_FOUND; do
+          for marker in SMOKE_NAV_READY SMOKE_NAV_OBSTACLES_BLOCKED SMOKE_NAV_ROUTE_FOUND SMOKE_NAV_FOUR_SECTORS SMOKE_NAV_CROSS_SECTOR_ROUTES; do
             if ! grep -Fq "$marker" "$RUNNER_TEMP/map_smoke.log"; then
               echo "ERROR: navigation check missing: $marker"
               exit 1
@@ -130,12 +141,12 @@ jobs:
           done
           echo "PASS: real map navigation and obstacles verified"
           echo "PASS: map scene started and terrain loaded"
-          "$GODOT" --headless --path . --export-debug "Android" build/SVO-v0.3.1-debug.apk
-          test -s build/SVO-v0.3.1-debug.apk
+          "$GODOT" --headless --path . --export-debug "Android" build/SVO-v0.3.2-debug.apk
+          test -s build/SVO-v0.3.2-debug.apk
 
       - name: Upload installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: SVO-v0.3.1-debug
-          path: build/SVO-v0.3.1-debug.apk
+          name: SVO-v0.3.2-debug
+          path: build/SVO-v0.3.2-debug.apk
           if-no-files-found: error
