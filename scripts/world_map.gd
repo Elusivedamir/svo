@@ -1,9 +1,10 @@
 extends Node2D
 
-# v0.3.2: four play-sized sectors, 4x walkable area and the same working test ball.
+# v0.3.3: unique continuous 12800x7200 landscape with independently authored walkability.
+# Preserve controls, camera and ball movement from the last successful build.
 # No game combat logic, structures, or HUD. Tap a point to pathfind, swipe to pan.
-const MAP_TEXTURE: Texture2D = preload("res://assets/map/terrain_v0.3.2.png")
-const NAV_TEXTURE: Texture2D = preload("res://assets/map/navigation_v0.3.2.png")
+const MAP_TEXTURE: Texture2D = preload("res://assets/map/terrain_v0.3.3.png")
+const NAV_TEXTURE: Texture2D = preload("res://assets/map/navigation_v0.3.3.png")
 const MENU_SCENE := "res://scenes/main_menu.tscn"
 const WORLD_SIZE := Vector2(12800.0, 7200.0)
 const SECTOR_SIZE := Vector2(6400.0, 3600.0)
@@ -41,7 +42,7 @@ func _ready() -> void:
         return
     nav_size = Vector2i(img.get_width(), img.get_height())
     if nav_size != EXPECTED_NAV_SIZE or Vector2i(MAP_TEXTURE.get_size()) != EXPECTED_TEXTURE_SIZE:
-        push_error("Map and navigation sizes do not match v0.3.2 fourfold expansion")
+        push_error("Map and navigation sizes do not match v0.3.3 unique world")
         return
     nav_cell = WORLD_SIZE / Vector2(nav_size)
     nav = AStarGrid2D.new()
@@ -108,10 +109,15 @@ func _ready() -> void:
     queue_redraw()
     print("SMOKE_MAP_READY")
     print("SMOKE_NAV_READY field/road/woods/houses/water/bridge: ", nav_size, "/", road, "/", wood, "/", buildings, "/", water, "/", bridges)
-    if nav.is_point_solid(Vector2i(46, 89)) and nav.is_point_solid(Vector2i(132, 38)):
+    if nav.is_point_solid(Vector2i(132, 82)) and nav.is_point_solid(Vector2i(82, 82)):
         print("SMOKE_NAV_OBSTACLES_BLOCKED")
     else:
         push_error("Navigation solid test failed")
+    # Test the mapped bridge and obstacle independently from raster dimensions.
+    if not nav.is_point_solid(Vector2i(56, 74)) and int(nav_types[74 * nav_size.x + 56]) == CELL_BRIDGE:
+        print("SMOKE_NAV_BRIDGE_OPEN")
+    else:
+        push_error("Bridge mask missing or blocked")
     var trial: PackedVector2Array = nav.get_point_path(spawn, Vector2i(185, 61))
     if trial.size() > 10:
         print("SMOKE_NAV_ROUTE_FOUND")
@@ -131,6 +137,7 @@ func _ready() -> void:
         and nav.get_point_path(spawn, south).size() > 30
     ):
         print("SMOKE_NAV_CROSS_SECTOR_ROUTES")
+        print("SMOKE_NAV_UNIQUE_WORLD")
     else:
         push_error("Expanded sectors are not connected by walkable routes")
 
